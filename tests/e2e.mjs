@@ -1,6 +1,8 @@
 // End-to-end retrieve: takes a real sharebuff URL + PIN and performs exactly
-// what web/app.js does (KDF → claim → decrypt), printing the plaintext.
-// Usage: node tests/e2e.mjs '<url>#v1....' '<PIN>' [--expect-status 410]
+// what web/app.js does (KDF → claim → decrypt → parse envelope). Text payloads
+// go to stdout as text; file payloads go to stdout as raw bytes with the
+// header JSON on stderr (redirect stdout to a file for binary comparison).
+// Usage: node tests/e2e.mjs '<url>#v2....' '<PIN>' [--expect-status 410]
 import { scryptAsync } from '../web/scrypt.js';
 
 const [url, pin, ...rest] = process.argv.slice(2);
@@ -26,7 +28,7 @@ const normalizePin = (p) => p.toUpperCase().replace(/[ -]/g, '')
   .replaceAll('O', '0').replaceAll('I', '1').replaceAll('L', '1');
 
 const u = new URL(url);
-const m = /^#v1\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)$/.exec(u.hash);
+const m = /^#v2\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)$/.exec(u.hash);
 if (!m) { console.error('bad fragment'); process.exit(2); }
 const [, id, kB58, saltB58] = m;
 const key = b58decode(kB58);
@@ -50,11 +52,22 @@ if (resp.status !== 200) {
   console.log(`OK: got expected ${resp.status}`, JSON.stringify(body));
   process.exit(0);
 }
-const blob = Uint8Array.from(atob(body.ct), (c) => c.charCodeAt(0));
+const blob = Buffer.from(body.ct, 'base64');
 const aesKey = await crypto.subtle.importKey('raw', root.slice(0, 32), 'AES-GCM', false, ['decrypt']);
-const plain = await crypto.subtle.decrypt(
-  { name: 'AES-GCM', iv: blob.slice(0, 12), additionalData: new TextEncoder().encode('sharebuff/v1.' + id) },
+const plain = new Uint8Array(await crypto.subtle.decrypt(
+  { name: 'AES-GCM', iv: blob.subarray(0, 12), additionalData: new TextEncoder().encode('sharebuff/v2.' + id) },
   aesKey,
-  blob.slice(12),
-);
-process.stdout.write(new TextDecoder().decode(plain));
+  blob.subarray(12),
+));
+
+// Envelope parse, mirroring web/app.js.
+const hlen = new DataView(plain.buffer, plain.byteOffset).getUint32(0);
+if (hlen > 4096 || 4 + hlen > plain.length) { console.error('bad envelope'); process.exit(1); }
+const header = JSON.parse(new TextDecoder().decode(plain.slice(4, 4 + hlen)));
+const payload = plain.slice(4 + hlen);
+if (header.t === 'file') {
+  console.error(`envelope: ${JSON.stringify(header)}`);
+  process.stdout.write(Buffer.from(payload));
+} else {
+  process.stdout.write(new TextDecoder().decode(payload));
+}

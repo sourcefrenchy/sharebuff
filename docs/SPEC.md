@@ -1,4 +1,4 @@
-# Sharebuff wire & crypto specification (v1)
+# Sharebuff wire & crypto specification (v2)
 
 This document is the single source of truth for the protocol. The Go CLI
 (`cmd/sharebuff`), the browser client (`web/app.js`), the Cloudflare Worker
@@ -8,10 +8,14 @@ conform to it. Cross-language conformance is enforced by
 
 ## Model
 
-A **secret** is a one-shot encrypted clipboard payload. The server is
-zero-knowledge: it stores only ciphertext and a verifier hash, and can never
-decrypt. The secret is destroyed on the **first valid claim**, after 5 invalid
-claims (burn), or at TTL expiry — whichever comes first.
+A **secret** is a one-shot encrypted payload: clipboard text or a single file.
+The server is zero-knowledge: it stores only ciphertext and a verifier hash,
+and can never decrypt — not even the filename or MIME type, which live inside
+the encrypted envelope. The secret is destroyed on the **first valid claim**,
+after 10 counted invalid claims (burn), or at TTL expiry — whichever comes
+first.
+
+v2 replaces v1 (envelope + 20 MiB payloads); v1 links are not supported.
 
 ## Parameters
 
@@ -23,7 +27,8 @@ claims (burn), or at TTL expiry — whichever comes first.
 | salt    | 16 random bytes, base58-encoded                    |
 | scrypt  | N=2^16, r=8, p=1, dkLen=64 (~64 MiB, memory-hard)  |
 | cipher  | AES-256-GCM, 12-byte random nonce                  |
-| max plaintext | 65536 bytes                                  |
+| max payload | 20 MiB (20971520 bytes)                        |
+| max envelope header | 4096 bytes                             |
 | TTL     | default 604800 s (7 d), min 60 s, max 604800 s     |
 | attempts| max 10 *counted* invalid claims, then burn         |
 | cooldown| after the n-th counted wrong attempt: min(2^n, 300) s; claims inside the window get 429 and are NOT counted |
@@ -52,21 +57,36 @@ comparing with the stored verifier. A database dump (ciphertext + verifier)
 grants neither decryption (no `K`) nor a valid claim (needs the SHA-256
 preimage `K_auth`).
 
+## Envelope
+
+What gets encrypted is an **envelope**: a small JSON header followed by the
+raw payload bytes. The header (filename, MIME type, kind) is therefore hidden
+from the server exactly like the payload itself.
+
+```
+header   = JSON: {"t":"text"} or {"t":"file","n":"<filename>","m":"<mime>"}
+envelope = u32_bigendian(len(header)) || header || payload
+```
+
+- `t` (required): `"text"` (payload is UTF-8 text destined for the clipboard)
+  or `"file"` (payload is arbitrary bytes offered as a download).
+- `n`, `m` (file mode): suggested filename and MIME type. Clients MUST treat
+  `n` as untrusted display data (strip path separators).
+- header length ≤ 4096; payload length ≤ 20 MiB.
+
 ## Encryption
 
 ```
 nonce = 12 random bytes
-AAD   = ASCII("sharebuff/v1." + id_base58)
-blob  = nonce || AES-256-GCM-Seal(K_enc, nonce, plaintext, AAD)
+AAD   = ASCII("sharebuff/v2." + id_base58)
+blob  = nonce || AES-256-GCM-Seal(K_enc, nonce, envelope, AAD)
 ct    = standard base64 of blob (with padding)
 ```
-
-Plaintext is the raw clipboard bytes (UTF-8 text expected by the web client).
 
 ## Retrieve URL
 
 ```
-https://<host>/#v1.<id_base58>.<K_base58>.<salt_base58>
+https://<host>/#v2.<id_base58>.<K_base58>.<salt_base58>
 ```
 
 Everything after `#` is a URL fragment: it is never transmitted to any server
@@ -88,7 +108,13 @@ Request: `{"id": "...", "ct": "<base64>", "verifier": "<hex>", "ttl_seconds": 60
 - `201` → `{"expires_at": <unix seconds>}`
 - `400` malformed field / bad base64 / ttl out of range
 - `409` id already exists
-- `413` ciphertext blob larger than 65536 + 28 bytes
+- `413` ciphertext blob larger than max envelope (4 + 4096 + 20 MiB) + 28 bytes
+
+Storage note (Cloudflare): SQLite-backed Durable Object values cap at 2 MB, so
+the DO transparently splits the base64 ciphertext across `ct:<n>` keys
+(~1.5 MB each) and rejoins them on claim. This is invisible to clients. The
+create/claim payloads ride DO `fetch()` bodies (not RPC) to avoid RPC size
+limits.
 
 ### `POST /api/secrets/{id}/claim`
 
@@ -125,13 +151,14 @@ Cache-Control: no-store
 
 ## Client claim flow (web/app.js)
 
-1. Parse fragment `v1.<id>.<K>.<salt>`; reject malformed.
+1. Parse fragment `v2.<id>.<K>.<salt>`; reject malformed.
 2. User types PIN (explicit user action — headless scanners stop here).
 3. `root = scrypt(...)` client-side (~1 s; doubles as proof-of-work).
 4. `POST /api/secrets/{id}/claim` with `auth = hex(root[32:64])`.
-5. On 200: decrypt with WebCrypto AES-GCM, write plaintext to the clipboard
-   (fallback: explicit "copy" button), then offer optional reveal. The server
-   already destroyed the ciphertext.
+5. On 200: decrypt with WebCrypto AES-GCM and parse the envelope. `text` →
+   write to the clipboard (fallback: explicit "copy" button) + optional
+   reveal. `file` → offer a local Blob download named per the header. The
+   server already destroyed the ciphertext either way.
 
 ## Explicit non-goals / accepted trade-offs
 

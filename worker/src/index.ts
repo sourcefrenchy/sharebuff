@@ -1,16 +1,20 @@
 // Sharebuff Worker: routes the JSON API to per-secret Durable Objects and
 // everything else to the static assets binding (../web). See docs/SPEC.md.
+// DO calls go over fetch() bodies, not RPC — ciphertexts can reach ~27 MB
+// base64, far past the 1 MiB RPC message cap.
 import { Secret } from './secret';
 export { Secret };
 
 interface Env {
   ASSETS: Fetcher;
-  SECRET: DurableObjectNamespace<Secret>;
+  SECRET: DurableObjectNamespace;
 }
 
 const ID_RE = /^[1-9A-HJ-NP-Za-km-z]{16,32}$/;
 const HEX_RE = /^[0-9a-f]{64}$/;
-const MAX_CT_B64 = Math.ceil((65536 + 28) / 3) * 4 + 8;
+const MAX_BLOB = 4 + 4096 + 20 * 1024 * 1024 + 12 + 16; // envelope + nonce + tag
+const MAX_CT_B64 = Math.ceil(MAX_BLOB / 3) * 4 + 8;
+const MAX_BODY = 32 * 1024 * 1024;
 const DEFAULT_TTL = 604800;
 const MIN_TTL = 60;
 const MAX_TTL = 604800;
@@ -41,8 +45,18 @@ function validB64(s: string): boolean {
   return /^[A-Za-z0-9+/]+={0,2}$/.test(s) && s.length % 4 === 0;
 }
 
+function stubFor(env: Env, id: string): DurableObjectStub {
+  return env.SECRET.get(env.SECRET.idFromName(id));
+}
+
+function withNoStore(resp: Response): Response {
+  const out = new Response(resp.body, resp);
+  out.headers.set('cache-control', 'no-store');
+  return out;
+}
+
 async function handleCreate(request: Request, env: Env): Promise<Response> {
-  const body = await readJSON(request, 128 * 1024);
+  const body = await readJSON(request, MAX_BODY);
   if (!body) return err(400, 'malformed body');
   const { id, ct, verifier } = body as { id?: string; ct?: string; verifier?: string };
   let ttl = (body.ttl_seconds as number | undefined) ?? 0;
@@ -53,10 +67,11 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   if (ct.length > MAX_CT_B64) return err(413, 'ciphertext too large');
   if (!Number.isInteger(ttl) || ttl < MIN_TTL || ttl > MAX_TTL) return err(400, 'ttl out of range');
 
-  const stub = env.SECRET.get(env.SECRET.idFromName(id));
-  const res = await stub.create(ct, verifier, ttl);
-  if (res.code === 409) return err(409, 'id already exists');
-  return json(201, { expires_at: Math.floor(res.expiresAt / 1000) });
+  const resp = await stubFor(env, id).fetch('https://do/create', {
+    method: 'POST',
+    body: JSON.stringify({ ct, verifier, ttl }),
+  });
+  return withNoStore(resp);
 }
 
 async function handleClaim(request: Request, env: Env, id: string): Promise<Response> {
@@ -65,19 +80,11 @@ async function handleClaim(request: Request, env: Env, id: string): Promise<Resp
   const auth = body?.auth;
   if (typeof auth !== 'string' || !HEX_RE.test(auth)) return err(400, 'malformed auth');
 
-  const stub = env.SECRET.get(env.SECRET.idFromName(id));
-  const res = await stub.claim(auth);
-  switch (res.code) {
-    case 200: return json(200, { ct: res.ct });
-    case 403: return json(403, { attempts_left: res.attemptsLeft });
-    case 410: return json(410, { reason: res.reason });
-    case 429: {
-      const r = json(429, { retry_after_seconds: res.retryAfterSeconds });
-      r.headers.set('Retry-After', String(res.retryAfterSeconds));
-      return r;
-    }
-    default: return err(404, 'not found');
-  }
+  const resp = await stubFor(env, id).fetch('https://do/claim', {
+    method: 'POST',
+    body: JSON.stringify({ auth }),
+  });
+  return withNoStore(resp);
 }
 
 export default {

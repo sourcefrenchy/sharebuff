@@ -7,7 +7,9 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"strings"
@@ -16,7 +18,7 @@ import (
 )
 
 const (
-	Version  = "v1"
+	Version  = "v2"
 	IDLen    = 16
 	KeyLen   = 32
 	SaltLen  = 16
@@ -27,8 +29,11 @@ const (
 	ScryptP = 1
 	rootLen = 64
 
-	MaxPlaintext = 64 * 1024
-	MaxAttempts  = 10
+	MaxPayload  = 20 << 20                    // user data inside the envelope
+	MaxHeader   = 4096                        // serialized envelope header
+	MaxEnvelope = 4 + MaxHeader + MaxPayload  // what Seal accepts
+	MaxBlob     = MaxEnvelope + NonceLen + 16 // nonce + ciphertext + GCM tag
+	MaxAttempts = 10
 
 	// After the n-th counted wrong attempt, further claims are rejected
 	// (HTTP 429, uncounted) until min(2^n, CooldownMaxSeconds) seconds pass.
@@ -177,10 +182,10 @@ func gcmFor(encKey []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// Seal encrypts plaintext, returning nonce||ciphertext||tag.
+// Seal encrypts an envelope, returning nonce||ciphertext||tag.
 func Seal(encKey []byte, idB58 string, plaintext []byte) ([]byte, error) {
-	if len(plaintext) > MaxPlaintext {
-		return nil, errors.New("wire: plaintext exceeds 64 KiB")
+	if len(plaintext) > MaxEnvelope {
+		return nil, errors.New("wire: envelope exceeds the maximum size")
 	}
 	aead, err := gcmFor(encKey)
 	if err != nil {
@@ -205,4 +210,53 @@ func Open(encKey []byte, idB58 string, blob []byte) ([]byte, error) {
 // Fragment renders the URL fragment for the retrieve page.
 func Fragment(p Params) string {
 	return Version + "." + Base58Encode(p.ID) + "." + Base58Encode(p.Key) + "." + Base58Encode(p.Salt)
+}
+
+// Header describes the envelope payload. It is encrypted alongside the
+// payload, so the server never sees a filename or MIME type.
+type Header struct {
+	T string `json:"t"`           // "text" | "file"
+	N string `json:"n,omitempty"` // filename (file mode)
+	M string `json:"m,omitempty"` // MIME type (file mode)
+}
+
+// EncodeEnvelope renders u32be(len(header)) || header JSON || payload.
+func EncodeEnvelope(h Header, payload []byte) ([]byte, error) {
+	if h.T != "text" && h.T != "file" {
+		return nil, errors.New("wire: header type must be text or file")
+	}
+	if len(payload) > MaxPayload {
+		return nil, errors.New("wire: payload exceeds 20 MiB")
+	}
+	hj, err := json.Marshal(h)
+	if err != nil {
+		return nil, err
+	}
+	if len(hj) > MaxHeader {
+		return nil, errors.New("wire: envelope header too large")
+	}
+	buf := make([]byte, 4+len(hj)+len(payload))
+	binary.BigEndian.PutUint32(buf[0:4], uint32(len(hj)))
+	copy(buf[4:], hj)
+	copy(buf[4+len(hj):], payload)
+	return buf, nil
+}
+
+// DecodeEnvelope parses an EncodeEnvelope blob.
+func DecodeEnvelope(b []byte) (Header, []byte, error) {
+	var h Header
+	if len(b) < 4 {
+		return h, nil, errors.New("wire: envelope truncated")
+	}
+	hlen := int(binary.BigEndian.Uint32(b[0:4]))
+	if hlen > MaxHeader || 4+hlen > len(b) {
+		return h, nil, errors.New("wire: envelope header out of bounds")
+	}
+	if err := json.Unmarshal(b[4:4+hlen], &h); err != nil {
+		return h, nil, err
+	}
+	if h.T != "text" && h.T != "file" {
+		return h, nil, errors.New("wire: unknown envelope type")
+	}
+	return h, b[4+hlen:], nil
 }

@@ -37,7 +37,7 @@ function normalizePin(pin) {
 }
 
 function parseFragment(hash) {
-  const m = /^#v1\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)$/.exec(hash);
+  const m = /^#v2\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)$/.exec(hash);
   if (!m) return null;
   try {
     const key = b58decode(m[2]);
@@ -71,11 +71,27 @@ async function deriveKeys(frag, pin) {
 async function decrypt(encKey, id, blob) {
   const key = await crypto.subtle.importKey('raw', encKey, 'AES-GCM', false, ['decrypt']);
   const plain = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: blob.slice(0, 12), additionalData: new TextEncoder().encode('sharebuff/v1.' + id) },
+    { name: 'AES-GCM', iv: blob.slice(0, 12), additionalData: new TextEncoder().encode('sharebuff/v2.' + id) },
     key,
     blob.slice(12),
   );
-  return new TextDecoder().decode(plain);
+  return new Uint8Array(plain);
+}
+
+// Envelope: u32be(header length) || header JSON || payload. See docs/SPEC.md.
+function parseEnvelope(bytes) {
+  if (bytes.length < 4) throw new Error('envelope truncated');
+  const hlen = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0);
+  if (hlen > 4096 || 4 + hlen > bytes.length) throw new Error('envelope header out of bounds');
+  const header = JSON.parse(new TextDecoder().decode(bytes.slice(4, 4 + hlen)));
+  if (header.t !== 'text' && header.t !== 'file') throw new Error('unknown envelope type');
+  return { header, payload: bytes.slice(4 + hlen) };
+}
+
+function formatSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 async function copyToClipboard(text) {
@@ -87,7 +103,7 @@ async function copyToClipboard(text) {
   }
 }
 
-function finish(text, copied) {
+function finishText(text, copied) {
   show('state-done');
   const msg = $('done-msg');
   if (copied) {
@@ -100,12 +116,33 @@ function finish(text, copied) {
       if (await copyToClipboard(text)) msg.textContent = 'Copied to your clipboard.';
     });
   }
+  $('reveal-btn').hidden = false;
   $('reveal-btn').addEventListener('click', () => {
     const out = $('secret-out');
     out.value = text;
     out.hidden = false;
     $('reveal-btn').hidden = true;
   }, { once: true });
+}
+
+function finishFile(header, payload) {
+  show('state-done');
+  // The name is untrusted data from the sender: keep only a safe basename.
+  const name = (header.n || 'sharebuff.bin').replace(/[/\\]/g, '_').slice(0, 255);
+  $('done-msg').textContent = `Decrypted ${name} (${formatSize(payload.length)}).`;
+  $('reveal-btn').hidden = true;
+  const btn = $('download-btn');
+  btn.hidden = false;
+  btn.textContent = `Download ${name}`;
+  const blob = new Blob([payload], { type: header.m || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  btn.addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+  });
+  btn.click(); // start the download immediately; button stays for retries
 }
 
 const frag = parseFragment(location.hash);
@@ -129,8 +166,13 @@ if (!frag) {
       });
       const body = await resp.json().catch(() => ({}));
       if (resp.status === 200) {
-        const text = await decrypt(keys.enc, frag.id, b64decode(body.ct));
-        finish(text, await copyToClipboard(text));
+        const { header, payload } = parseEnvelope(await decrypt(keys.enc, frag.id, b64decode(body.ct)));
+        if (header.t === 'file') {
+          finishFile(header, payload);
+        } else {
+          const text = new TextDecoder().decode(payload);
+          finishText(text, await copyToClipboard(text));
+        }
       } else if (resp.status === 403) {
         setStatus(`Wrong PIN — the secret is untouched. ${body.attempts_left} attempt${body.attempts_left === 1 ? '' : 's'} left.`, 'err');
       } else if (resp.status === 429) {

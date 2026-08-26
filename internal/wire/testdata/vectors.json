@@ -4,32 +4,51 @@
     "pin": "0123AB",
     "salt_b58": "FP4VQzjM4KcwHiS8cj2Xs",
     "id_b58": "Na6EczbX5yvuS59hRb3JJ",
-    "plaintext_b64": "aGVsbG8gd29ybGQ=",
+    "header_json": "{\"t\":\"text\"}",
+    "payload_b64": "aGVsbG8gd29ybGQ=",
+    "envelope_b64": "AAAADHsidCI6InRleHQifWhlbGxvIHdvcmxk",
     "enc_key_hex": "92c0f0815d5148817bba4af2aeba677efe3a9a2d8af6f4254217ccfe20fbb954",
     "auth_key_hex": "73ed315cc45fdaa3e03e99919afb22f0714bbfa3185e86b5bfcf5de30bb9a5e5",
     "verifier_hex": "261aa6e8b31ffdb40cac060f4c9126f8af21f25e1c2773e653ea1db320d5e34d",
-    "ct_b64": "Y++pJFVeayjf9/GXkPIcZlr82mNjswlCgdkmRpRD0XV6Sikj8uUx"
+    "ct_b64": "Zj1w4goeOevmUA7CtwSsH7tvL0I53KUTT46gN2/7MjXhn/Z42yZEAeIREhBRCN4BfRfTlrLQUA=="
   },
   {
     "k_b58": "CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqB",
     "pin": "ZZZZZZ",
     "salt_b58": "QBZdJgZmLMWw1wo1n6FUFc",
     "id_b58": "SHo8yCXUGqkCUPsCPpuhGw",
-    "plaintext_b64": "bXVsdGkKbGluZQrDqcOgw7wg8J+UkSBwYXlsb2Fk",
+    "header_json": "{\"t\":\"text\"}",
+    "payload_b64": "bXVsdGkKbGluZQrDqcOgw7wg8J+UkSBwYXlsb2Fk",
+    "envelope_b64": "AAAADHsidCI6InRleHQifW11bHRpCmxpbmUKw6nDoMO8IPCflJEgcGF5bG9hZA==",
     "enc_key_hex": "051e0791aff738ca459a19dd61629a401d6c33e8b58630524585f1134a53b43d",
     "auth_key_hex": "eb08d9715cb91f67150ea17a285461eada84a8fa0b1133f9e248b2125dc72d28",
     "verifier_hex": "dccd4e7897ee7285782b3026e64a8ab3a8a6d4dadc62902ec7a44f43b872b578",
-    "ct_b64": "SDXQoRp0QJhm8elDd61hUh3+UizYm2XftkTF/SgC6bHQg9WxBq04wRE5+dHkwAQ93oFJ9+yE0AhdSw=="
+    "ct_b64": "PzzsnqeAyp3zxfaYnGR4UO0oJ5Y8hK0UITqY/0B9rles9k8357kFdGG0NCcCve+JhabeulPI8sZDoNu55DUV6f4zrfvlca8Ia7Q="
   },
   {
     "k_b58": "11111111111111111111111111111111",
     "pin": "o1i-l 2ab",
     "salt_b58": "YcVfxkQb6JRzqk5kF2tNLv",
     "id_b58": "2z3UvJxqmTZxVJiU3voDFu",
-    "plaintext_b64": "UElOIG5vcm1hbGl6YXRpb24gY2FzZQ==",
+    "header_json": "{\"t\":\"text\"}",
+    "payload_b64": "UElOIG5vcm1hbGl6YXRpb24gY2FzZQ==",
+    "envelope_b64": "AAAADHsidCI6InRleHQifVBJTiBub3JtYWxpemF0aW9uIGNhc2U=",
     "enc_key_hex": "9f31f35e044afc57c8e42128ecc52adbfbb95ba2eec4bfeb44a56bcf210f000f",
     "auth_key_hex": "1720e2386c1b8c8434fefe2142a46f4871fca21ca99775514f4dbbe2d3983d04",
     "verifier_hex": "1b31d9e610b68e99368c957e3a3829c0ab738cd95ec8ddf9714fc6dfa00f7668",
-    "ct_b64": "CAyV6dvhLJ+EiFyov5hbpTg8JPT4pnqSe6L2oxg5RFpzRba2vjd2YlgsCYBalwXO7u0="
+    "ct_b64": "jTRv0nGr4UZ5akQSg5i3KGp7bYDWd7QdbXeYP/ItYefYHwlF2NhlnLSSXkyGCIdTJZuTfulzqOojFfVeHsDgvhO3"
+  },
+  {
+    "k_b58": "5TeWSsjg2gbxCyWVniXeCmwM7UtHTCK7svzJr5xYJzHf",
+    "pin": "F1LEPN",
+    "salt_b58": "5Tr5pSv9E2n9rBroN63UaX",
+    "id_b58": "Ky6byeeMTP4Q73eeYcw2Cx",
+    "header_json": "{\"t\":\"file\",\"n\":\"résumé 🔐.pdf\",\"m\":\"application/pdf\"}",
+    "payload_b64": "JVBERi0AAf7/gH8=",
+    "envelope_b64": "AAAAOnsidCI6ImZpbGUiLCJuIjoicsOpc3Vtw6kg8J+UkC5wZGYiLCJtIjoiYXBwbGljYXRpb24vcGRmIn0lUERGLQAB/v+Afw==",
+    "enc_key_hex": "7dec4d78281ab5a53b459077883b60f651c354bd5dffdc0b974198901ac65453",
+    "auth_key_hex": "1d35257e5b16d8a5ed00c00e5171a2a61d88ee27dce5d374a261682801a11a80",
+    "verifier_hex": "565c659ff28d9ed9df07c9e2038e1e33fff043885428d94285045f641862f923",
+    "ct_b64": "aH7bcbUCmZRnVlT7Vhgi/hhJWrJxDkO5qzkUU6Cl0Yh8zKvw+IsCiYp7jGklFNW6yyca4Vsy/InzVTe1exmB7FsjNejsD9nPwUiuWlFUHWPl8KwE6+E0FFZXJ0VrdVjTxlN5N1c="
   }
 ]

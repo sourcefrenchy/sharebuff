@@ -47,11 +47,20 @@ for (const [i, v] of vectors.entries()) {
   const blob = Uint8Array.from(atob(v.ct_b64), (c) => c.charCodeAt(0));
   const aesKey = await crypto.subtle.importKey('raw', root.slice(0, 32), 'AES-GCM', false, ['decrypt']);
   const plain = new Uint8Array(await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: blob.slice(0, 12), additionalData: new TextEncoder().encode('sharebuff/v1.' + v.id_b58) },
+    { name: 'AES-GCM', iv: blob.slice(0, 12), additionalData: new TextEncoder().encode('sharebuff/v2.' + v.id_b58) },
     aesKey,
     blob.slice(12),
   ));
-  check(i, 'plaintext', btoa(String.fromCharCode(...plain)), v.plaintext_b64);
+  check(i, 'envelope', btoa(String.fromCharCode(...plain)), v.envelope_b64);
+
+  // Parse the envelope exactly the way web/app.js does.
+  const hlen = new DataView(plain.buffer, plain.byteOffset).getUint32(0);
+  if (hlen > 4096 || 4 + hlen > plain.length) { failures++; console.error(`vector ${i}: envelope header out of bounds`); continue; }
+  const header = JSON.parse(new TextDecoder().decode(plain.slice(4, 4 + hlen)));
+  const wantHeader = JSON.parse(v.header_json);
+  check(i, 'header', JSON.stringify(header), JSON.stringify(wantHeader));
+  const payload = plain.slice(4 + hlen);
+  check(i, 'payload', btoa(String.fromCharCode(...payload)), v.payload_b64);
 }
 
 if (failures) { console.error(`FAIL: ${failures} mismatch(es)`); process.exit(1); }

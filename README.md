@@ -1,16 +1,23 @@
 # Sharebuff
 
-One-shot, end-to-end-encrypted clipboard drop. Post a secret from your
-clipboard with a tiny CLI; the recipient opens a link, types a one-time PIN,
-and the data is decrypted **in their browser**, copied to their clipboard, and
-**destroyed on the server at that instant**. The server is zero-knowledge: it
-only ever stores ciphertext plus a verifier hash and can never decrypt.
+One-shot, end-to-end-encrypted secret drop for clipboard text **and files**
+(up to 20 MiB). Post with a tiny CLI; the recipient opens a link, types a
+one-time PIN, and the data is decrypted **in their browser** — text lands on
+their clipboard, files download locally — and is **destroyed on the server at
+that instant**. The server is zero-knowledge: it only ever stores ciphertext
+plus a verifier hash and can never decrypt (not even the filename, which
+travels inside the encrypted envelope).
 
 ```
-$ pbpaste | sharebuff        # or: sharebuff  (reads the macOS clipboard)
-URL: https://sharebuff.sharebuff-worker.workers.dev/#v1.<id>.<key>.<salt>
+$ sharebuff                          # sends your clipboard (macOS/Linux/Windows)
+$ some-command | sharebuff           # sends piped text
+$ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
+URL: https://sharebuff.sharebuff-worker.workers.dev/#v2.<id>.<key>.<salt>
 PIN: 7KQ4TN
 ```
+
+Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
+or `Get-Clipboard` (Windows PowerShell).
 
 The CLI defaults to the deployed Worker
 (`https://sharebuff.sharebuff-worker.workers.dev`); point it elsewhere with
@@ -95,9 +102,9 @@ it with `SHAREBUFF_URL`/`--server`.
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--clip]
+sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--clip] [--file PATH]
 ```
 
-Reads piped stdin, or the macOS clipboard when run interactively. Input is
-capped at 64 KiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance
-goes to stderr.
+Input precedence: `--file`, then piped stdin, then the system clipboard.
+Payloads are capped at 20 MiB. `URL:` and `PIN:` go to stdout
+(script-friendly); guidance goes to stderr.

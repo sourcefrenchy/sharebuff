@@ -22,6 +22,10 @@ type secret struct {
 }
 
 func makeSecret(t *testing.T) secret {
+	return makeSecretPayload(t, []byte("payload"))
+}
+
+func makeSecretPayload(t *testing.T, payload []byte) secret {
 	t.Helper()
 	p := wire.NewParams()
 	pin := wire.NewPIN(6)
@@ -30,7 +34,11 @@ func makeSecret(t *testing.T) secret {
 		t.Fatal(err)
 	}
 	id := wire.Base58Encode(p.ID)
-	blob, err := wire.Seal(encKey, id, []byte("payload"))
+	env, err := wire.EncodeEnvelope(wire.Header{T: "file", N: "test.bin", M: "application/octet-stream"}, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := wire.Seal(encKey, id, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,8 +238,8 @@ func TestConcurrentClaims(t *testing.T) {
 func TestValidation(t *testing.T) {
 	ts, _ := newTestServer(t)
 	sec := makeSecret(t)
-	// Oversized ciphertext.
-	big := base64.StdEncoding.EncodeToString(make([]byte, wire.MaxPlaintext+wire.NonceLen+17))
+	// Oversized ciphertext (one byte past the blob cap).
+	big := base64.StdEncoding.EncodeToString(make([]byte, wire.MaxBlob+1))
 	if code, _ := post(t, ts.URL+"/api/secrets", map[string]any{
 		"id": sec.id, "ct": big, "verifier": sec.verifier, "ttl_seconds": 3600,
 	}); code != 413 {
@@ -246,6 +254,22 @@ func TestValidation(t *testing.T) {
 		if code, _ := post(t, ts.URL+"/api/secrets", req); code != 400 {
 			t.Fatalf("expected 400 for %v, got %d", req, code)
 		}
+	}
+}
+
+// TestLargePayloadRoundtrip pushes a 3 MiB binary through create+claim and
+// verifies the ciphertext comes back byte-identical and decryptable.
+func TestLargePayloadRoundtrip(t *testing.T) {
+	ts, _ := newTestServer(t)
+	payload := bytes.Repeat([]byte{0xC3, 0x28, 0x00, 0xFF}, 3<<20/4) // 3 MiB, non-UTF8
+	sec := makeSecretPayload(t, payload)
+	create(t, ts, sec)
+	code, body := post(t, ts.URL+"/api/secrets/"+sec.id+"/claim", map[string]string{"auth": sec.authHex})
+	if code != 200 {
+		t.Fatalf("claim: %d", code)
+	}
+	if body["ct"].(string) != sec.ct {
+		t.Fatal("large ciphertext corrupted in transit")
 	}
 }
 

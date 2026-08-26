@@ -94,12 +94,71 @@ func TestSealOpenRoundtrip(t *testing.T) {
 	}
 }
 
+func TestEnvelopeRoundtrip(t *testing.T) {
+	cases := []struct {
+		h       Header
+		payload []byte
+	}{
+		{Header{T: "text"}, []byte("hello")},
+		{Header{T: "file", N: "résumé 🔐.pdf", M: "application/pdf"}, []byte{0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0xfe}},
+		{Header{T: "file", N: "empty.bin", M: "application/octet-stream"}, []byte{}},
+		{Header{T: "text"}, bytes.Repeat([]byte{0xa5}, 1<<20)}, // 1 MiB
+	}
+	for i, c := range cases {
+		env, err := EncodeEnvelope(c.h, c.payload)
+		if err != nil {
+			t.Fatalf("case %d encode: %v", i, err)
+		}
+		h, payload, err := DecodeEnvelope(env)
+		if err != nil {
+			t.Fatalf("case %d decode: %v", i, err)
+		}
+		if h != c.h || !bytes.Equal(payload, c.payload) {
+			t.Fatalf("case %d roundtrip mismatch: %+v", i, h)
+		}
+	}
+}
+
+func TestEnvelopeBounds(t *testing.T) {
+	if _, err := EncodeEnvelope(Header{T: "weird"}, nil); err == nil {
+		t.Fatal("bad type accepted")
+	}
+	if _, err := EncodeEnvelope(Header{T: "file", N: strings.Repeat("x", MaxHeader)}, nil); err == nil {
+		t.Fatal("oversized header accepted")
+	}
+	if _, err := EncodeEnvelope(Header{T: "text"}, make([]byte, MaxPayload+1)); err == nil {
+		t.Fatal("oversized payload accepted")
+	}
+	for _, bad := range [][]byte{
+		{}, {0, 0}, {0, 0, 0, 9, '{', '}'}, // truncated / header past end
+		{0xff, 0xff, 0xff, 0xff},           // absurd header length
+		append([]byte{0, 0, 0, 2}, []byte("{}")...), // valid JSON, missing type
+	} {
+		if _, _, err := DecodeEnvelope(bad); err == nil {
+			t.Fatalf("bad envelope %x accepted", bad)
+		}
+	}
+}
+
+func TestSealRejectsOversizedEnvelope(t *testing.T) {
+	p := NewParams()
+	encKey, _, err := Derive(p.Key, "0123AB", p.Salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Seal(encKey, Base58Encode(p.ID), make([]byte, MaxEnvelope+1)); err == nil {
+		t.Fatal("oversized envelope sealed")
+	}
+}
+
 type vector struct {
 	KB58      string `json:"k_b58"`
 	PIN       string `json:"pin"`
 	SaltB58   string `json:"salt_b58"`
 	IDB58     string `json:"id_b58"`
-	Plaintext string `json:"plaintext_b64"`
+	Header    string `json:"header_json"`
+	Payload   string `json:"payload_b64"`
+	Envelope  string `json:"envelope_b64"`
 	EncKeyHex string `json:"enc_key_hex"`
 	AuthHex   string `json:"auth_key_hex"`
 	Verifier  string `json:"verifier_hex"`
@@ -113,11 +172,14 @@ func TestVectors(t *testing.T) {
 	fixed := []struct {
 		key, salt, id byte
 		pin           string
-		plain         string
+		header        Header
+		payload       []byte
 	}{
-		{0x01, 0x02, 0x03, "0123AB", "hello world"},
-		{0xaa, 0xbb, 0xcc, "ZZZZZZ", "multi\nline\néàü \U0001f511 payload"},
-		{0x00, 0xff, 0x10, "o1i-l 2ab", "PIN normalization case"},
+		{0x01, 0x02, 0x03, "0123AB", Header{T: "text"}, []byte("hello world")},
+		{0xaa, 0xbb, 0xcc, "ZZZZZZ", Header{T: "text"}, []byte("multi\nline\néàü \U0001f511 payload")},
+		{0x00, 0xff, 0x10, "o1i-l 2ab", Header{T: "text"}, []byte("PIN normalization case")},
+		{0x42, 0x24, 0x99, "F1LEPN", Header{T: "file", N: "résumé 🔐.pdf", M: "application/pdf"},
+			[]byte{0x25, 0x50, 0x44, 0x46, 0x2d, 0x00, 0x01, 0xfe, 0xff, 0x80, 0x7f}},
 	}
 	var vecs []vector
 	for _, f := range fixed {
@@ -129,20 +191,32 @@ func TestVectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		blob, err := Seal(encKey, id, []byte(f.plain))
+		env, err := EncodeEnvelope(f.header, f.payload)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Sanity: our own Open agrees.
-		if got, err := Open(encKey, id, blob); err != nil || !bytes.Equal(got, []byte(f.plain)) {
+		blob, err := Seal(encKey, id, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Sanity: our own Open + DecodeEnvelope agree.
+		got, err := Open(encKey, id, blob)
+		if err != nil || !bytes.Equal(got, env) {
 			t.Fatalf("self-open failed: %v", err)
 		}
+		h, payload, err := DecodeEnvelope(got)
+		if err != nil || h != f.header || !bytes.Equal(payload, f.payload) {
+			t.Fatalf("self-decode-envelope failed: %v", err)
+		}
+		hj, _ := json.Marshal(f.header)
 		vecs = append(vecs, vector{
 			KB58:      Base58Encode(key),
 			PIN:       f.pin,
 			SaltB58:   Base58Encode(salt),
 			IDB58:     id,
-			Plaintext: base64.StdEncoding.EncodeToString([]byte(f.plain)),
+			Header:    string(hj),
+			Payload:   base64.StdEncoding.EncodeToString(f.payload),
+			Envelope:  base64.StdEncoding.EncodeToString(env),
 			EncKeyHex: hex.EncodeToString(encKey),
 			AuthHex:   hex.EncodeToString(authKey),
 			Verifier:  VerifierHex(authKey),

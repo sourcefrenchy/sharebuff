@@ -83,7 +83,8 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 		Verifier   string `json:"verifier"`
 		TTLSeconds int64  `json:"ttl_seconds"`
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 128*1024))
+	// Blob cap is ~20 MiB; base64 (+33%) plus JSON framing fits in 32 MiB.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil || json.Unmarshal(body, &req) != nil {
 		errJSON(w, http.StatusBadRequest, "malformed body")
 		return
@@ -104,7 +105,7 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "malformed ciphertext")
 		return
 	}
-	if len(ct) > wire.MaxPlaintext+wire.NonceLen+16 {
+	if len(ct) > wire.MaxBlob {
 		errJSON(w, http.StatusRequestEntityTooLarge, "ciphertext too large")
 		return
 	}
@@ -213,8 +214,8 @@ func main() {
 		Addr:              *addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		ReadTimeout:       5 * time.Minute, // ~27 MB uploads on slow links
+		WriteTimeout:      5 * time.Minute,
 	}
 	log.Fatal(srv.ListenAndServe())
 }

@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -36,24 +38,68 @@ func fatalf(format string, a ...any) {
 	os.Exit(1)
 }
 
-func readInput(forceClip bool) []byte {
+// readClipboard reads the system clipboard as text on macOS, Linux
+// (Wayland or X11), and Windows.
+func readClipboard() ([]byte, error) {
+	var candidates [][]string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = [][]string{{"pbpaste"}}
+	case "linux":
+		candidates = [][]string{
+			{"wl-paste", "--no-newline"},
+			{"xclip", "-selection", "clipboard", "-o"},
+			{"xsel", "-ob"},
+		}
+	case "windows":
+		candidates = [][]string{{"powershell", "-NoProfile", "-Command", "Get-Clipboard", "-Raw"}}
+	default:
+		return nil, fmt.Errorf("clipboard capture not supported on %s; pipe the data instead", runtime.GOOS)
+	}
+	var lastErr error
+	for _, c := range candidates {
+		if _, err := exec.LookPath(c[0]); err != nil {
+			lastErr = err
+			continue
+		}
+		out, err := exec.Command(c[0], c[1:]...).Output()
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("no working clipboard tool (tried pbpaste/wl-paste/xclip/xsel/powershell): %v", lastErr)
+}
+
+// readInput resolves the payload and its envelope header from, in order of
+// precedence: --file, piped stdin, the system clipboard.
+func readInput(filePath string, forceClip bool) (wire.Header, []byte) {
+	if filePath != "" {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fatalf("reading %s: %v", filePath, err)
+		}
+		name := filepath.Base(filePath)
+		mt := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
+		if mt == "" {
+			mt = "application/octet-stream"
+		}
+		return wire.Header{T: "file", N: name, M: mt}, data
+	}
 	stat, err := os.Stdin.Stat()
 	piped := err == nil && stat.Mode()&os.ModeCharDevice == 0
 	if piped && !forceClip {
-		data, err := io.ReadAll(io.LimitReader(os.Stdin, wire.MaxPlaintext+1))
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, wire.MaxPayload+1))
 		if err != nil {
 			fatalf("reading stdin: %v", err)
 		}
-		return data
+		return wire.Header{T: "text"}, data
 	}
-	if runtime.GOOS != "darwin" {
-		fatalf("no piped stdin and clipboard capture is only wired for macOS; pipe the data instead: <cmd> | sharebuff")
-	}
-	out, err := exec.Command("pbpaste").Output()
+	data, err := readClipboard()
 	if err != nil {
-		fatalf("pbpaste: %v", err)
+		fatalf("%v", err)
 	}
-	return out
+	return wire.Header{T: "text"}, data
 }
 
 // defaultServer is the deployed Cloudflare Worker; override with
@@ -68,7 +114,8 @@ func main() {
 	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
 	ttl := flag.Duration("ttl", 168*time.Hour, "time-to-live (1m..168h)")
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
-	clip := flag.Bool("clip", false, "read from the macOS clipboard even when stdin is piped")
+	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
+	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
 	flag.Parse()
 
 	if *server == "" {
@@ -83,12 +130,12 @@ func main() {
 		fatalf("--pin-len must be at least 6")
 	}
 
-	plain := readInput(*clip)
+	header, plain := readInput(*file, *clip)
 	if len(plain) == 0 {
 		fatalf("nothing to share (empty input)")
 	}
-	if len(plain) > wire.MaxPlaintext {
-		fatalf("input exceeds the %d KiB limit", wire.MaxPlaintext/1024)
+	if len(plain) > wire.MaxPayload {
+		fatalf("input exceeds the %d MiB limit", wire.MaxPayload>>20)
 	}
 
 	p := wire.NewParams()
@@ -97,8 +144,12 @@ func main() {
 	if err != nil {
 		fatalf("deriving keys: %v", err)
 	}
+	env, err := wire.EncodeEnvelope(header, plain)
+	if err != nil {
+		fatalf("packing envelope: %v", err)
+	}
 	id := wire.Base58Encode(p.ID)
-	blob, err := wire.Seal(encKey, id, plain)
+	blob, err := wire.Seal(encKey, id, env)
 	if err != nil {
 		fatalf("encrypting: %v", err)
 	}
@@ -109,7 +160,7 @@ func main() {
 		Verifier:   wire.VerifierHex(authKey),
 		TTLSeconds: ttlSec,
 	})
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Minute} // large uploads on slow links
 	resp, err := client.Post(base+"/api/secrets", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fatalf("posting secret: %v", err)
@@ -123,7 +174,11 @@ func main() {
 
 	fmt.Printf("URL: %s/#%s\n", base, wire.Fragment(p))
 	fmt.Printf("PIN: %s\n", pin)
-	fmt.Fprintf(os.Stderr, "\nOne-shot secret posted (%d bytes encrypted locally; the server cannot read it).\n", len(plain))
+	what := fmt.Sprintf("%d bytes of text", len(plain))
+	if header.T == "file" {
+		what = fmt.Sprintf("file %q (%d bytes, %s)", header.N, len(plain), header.M)
+	}
+	fmt.Fprintf(os.Stderr, "\nOne-shot secret posted: %s, encrypted locally; the server cannot read it (not even the filename).\n", what)
 	fmt.Fprintf(os.Stderr, "Expires %s, on the first valid retrieve, or after %d wrong PINs.\n",
 		time.Unix(cr.ExpiresAt, 0).Local().Format(time.RFC1123), wire.MaxAttempts)
 	fmt.Fprintf(os.Stderr, "Share the URL and the PIN over two different channels.\n")
