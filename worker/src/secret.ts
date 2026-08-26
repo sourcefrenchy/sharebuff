@@ -3,12 +3,18 @@
 // Conforms to docs/SPEC.md.
 import { DurableObject } from 'cloudflare:workers';
 
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 10;
+const COOLDOWN_MAX_S = 300;
+
+// Cooldown after the n-th counted wrong attempt: min(2^n, 300) seconds.
+const cooldownMs = (attempts: number) =>
+  Math.min(2 ** attempts, COOLDOWN_MAX_S) * 1000;
 
 interface Rec {
   ct?: string;        // base64 blob (absent on tombstones)
   verifier?: string;  // lowercase hex sha256(K_auth)
   attempts?: number;
+  nextAllowedAt?: number; // ms epoch
   gone?: 'claimed' | 'burned';
   expiresAt: number;  // ms epoch
 }
@@ -18,6 +24,7 @@ export type ClaimResult =
   | { code: 200; ct: string }
   | { code: 403; attemptsLeft: number }
   | { code: 410; reason: 'claimed' | 'burned' }
+  | { code: 429; retryAfterSeconds: number }
   | { code: 404 };
 
 function hex(buf: ArrayBuffer): string {
@@ -56,9 +63,16 @@ export class Secret extends DurableObject {
     }
     if (rec.gone) return { code: 410, reason: rec.gone };
 
+    // Cooldown gate: rejected before the proof is examined and NOT counted —
+    // hammering can neither brute-force the PIN nor burn the secret.
+    if (rec.nextAllowedAt && Date.now() < rec.nextAllowedAt) {
+      return { code: 429, retryAfterSeconds: Math.ceil((rec.nextAllowedAt - Date.now()) / 1000) };
+    }
+
     const sum = hex(await crypto.subtle.digest('SHA-256', hexToBytes(auth)));
     if (!constantTimeEqualHex(sum, rec.verifier!)) {
       rec.attempts = (rec.attempts ?? 0) + 1;
+      rec.nextAllowedAt = Date.now() + cooldownMs(rec.attempts);
       if (rec.attempts >= MAX_ATTEMPTS) {
         // Burn: keep only a tombstone until the original expiry.
         await this.ctx.storage.put<Rec>('rec', { gone: 'burned', expiresAt: rec.expiresAt });

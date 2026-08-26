@@ -13,7 +13,7 @@ PIN: 7KQ4TN
 ```
 
 Share the URL and the PIN over **two different channels**. The secret dies on
-the first valid retrieve, after 5 wrong PINs (burn), or after 7 days —
+the first valid retrieve, after 10 wrong PINs (burn), or after 7 days —
 whichever comes first.
 
 ## Security model (short version — full spec in [docs/SPEC.md](docs/SPEC.md))
@@ -28,8 +28,12 @@ whichever comes first.
   `K_auth`, derivable only from `K` (URL fragment) **and** the PIN. One
   Durable Object per secret serializes claims — exactly one can ever succeed;
   the record is tombstoned before the ciphertext is returned.
-- **Wrong PINs never burn** the secret (up to 5 attempts, then it burns —
-  online brute force is capped, and each guess costs a ~1 s, 64 MiB scrypt).
+- **Wrong PINs never burn** the secret (up to 10 counted attempts, then it
+  burns — online brute force is capped, and each guess costs a ~1 s, 64 MiB
+  scrypt). After each miss an **exponential cooldown** (2 s → 4 s → … → 5 min)
+  rejects further claims with `429` *before the proof is examined*, and those
+  are **not counted**: hammering the endpoint can neither brute-force the PIN
+  nor burn the secret by volume.
 - **Bot/scanner-proof by construction**: everything secret-specific lives in
   the URL *fragment*, which browsers, link-preview bots and URL scanners never
   send to any server. Opening the link is stateless; only a deliberately

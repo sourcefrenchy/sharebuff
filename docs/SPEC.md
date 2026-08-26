@@ -25,7 +25,8 @@ claims (burn), or at TTL expiry — whichever comes first.
 | cipher  | AES-256-GCM, 12-byte random nonce                  |
 | max plaintext | 65536 bytes                                  |
 | TTL     | default 604800 s (7 d), min 60 s, max 604800 s     |
-| attempts| max 5 invalid claims, then burn                    |
+| attempts| max 10 *counted* invalid claims, then burn         |
+| cooldown| after the n-th counted wrong attempt: min(2^n, 300) s; claims inside the window get 429 and are NOT counted |
 
 Base58 uses the Bitcoin alphabet
 `123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz` (leading zero
@@ -96,10 +97,19 @@ Request: `{"auth": "<hex>"}`
 - `200` → `{"ct": "<base64>"}` — the record is atomically replaced by a
   tombstone *before* the response is sent; exactly one claim can ever succeed
   (Durable Objects serialize per-id; the Go server holds a lock).
-- `403` → `{"attempts_left": n}` — wrong proof; the secret is untouched.
+- `403` → `{"attempts_left": n}` — wrong proof; the secret is untouched. This
+  starts a cooldown of min(2^attempts, 300) seconds.
+- `429` → `{"retry_after_seconds": n}` (+ `Retry-After` header) — a claim
+  arrived during a cooldown window. It is rejected **before** the proof is
+  even examined and does **not** count toward the burn limit: hammering the
+  endpoint can neither brute-force the PIN nor burn the secret by volume.
 - `410` → `{"reason": "claimed"|"burned"}` — destroyed earlier (tombstone kept
   until original expiry).
 - `404` unknown or expired id.
+
+Burn-vs-abuse rationale: only deliberate, correctly paced wrong proofs are
+counted (10 lifetime → burn, fail-closed). Rapid-fire attempts — the signature
+of a bot or a spam-burn attack — are absorbed as uncounted 429s.
 
 ### `GET /`
 

@@ -43,12 +43,30 @@ func makeSecret(t *testing.T) secret {
 	}
 }
 
-func newTestServer(t *testing.T) *httptest.Server {
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func newTestServer(t *testing.T) (*httptest.Server, *fakeClock) {
 	t.Helper()
-	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour}
+	clk := &fakeClock{t: time.Now()}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now}
 	ts := httptest.NewServer(newMux(s))
 	t.Cleanup(ts.Close)
-	return ts
+	return ts, clk
 }
 
 func post(t *testing.T, url string, body any) (int, map[string]any) {
@@ -75,7 +93,7 @@ func create(t *testing.T, ts *httptest.Server, sec secret) {
 }
 
 func TestClaimLifecycle(t *testing.T) {
-	ts := newTestServer(t)
+	ts, clk := newTestServer(t)
 	sec := makeSecret(t)
 	create(t, ts, sec)
 
@@ -89,12 +107,14 @@ func TestClaimLifecycle(t *testing.T) {
 	claimURL := ts.URL + "/api/secrets/" + sec.id + "/claim"
 	badAuth := "00" + sec.authHex[2:]
 
-	// Wrong proofs do NOT burn; attempts_left counts down.
+	// Wrong proofs do NOT burn; attempts_left counts down (clock advanced
+	// past each cooldown so the attempts are counted).
 	for i := 1; i <= 2; i++ {
 		code, body := post(t, ts.URL+"/api/secrets/"+sec.id+"/claim", map[string]string{"auth": badAuth})
 		if code != 403 || int(body["attempts_left"].(float64)) != wire.MaxAttempts-i {
 			t.Fatalf("bad claim %d: code=%d body=%v", i, code, body)
 		}
+		clk.Advance(time.Duration(wire.CooldownMaxSeconds+1) * time.Second)
 	}
 
 	// Valid claim returns the ciphertext and destroys the record.
@@ -114,7 +134,7 @@ func TestClaimLifecycle(t *testing.T) {
 }
 
 func TestBurnAfterMaxAttempts(t *testing.T) {
-	ts := newTestServer(t)
+	ts, clk := newTestServer(t)
 	sec := makeSecret(t)
 	create(t, ts, sec)
 	claimURL := ts.URL + "/api/secrets/" + sec.id + "/claim"
@@ -124,6 +144,7 @@ func TestBurnAfterMaxAttempts(t *testing.T) {
 		if code, _ := post(t, claimURL, map[string]string{"auth": badAuth}); code != 403 {
 			t.Fatalf("attempt %d: code=%d", i, code)
 		}
+		clk.Advance(time.Duration(wire.CooldownMaxSeconds+1) * time.Second)
 	}
 	if code, body := post(t, claimURL, map[string]string{"auth": badAuth}); code != 410 || body["reason"] != "burned" {
 		t.Fatalf("burning attempt: code=%d body=%v", code, body)
@@ -134,9 +155,48 @@ func TestBurnAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+// TestCooldown: attempts inside the cooldown window are rejected with 429 and
+// do NOT count toward the burn limit — spam can neither brute-force nor burn.
+func TestCooldown(t *testing.T) {
+	ts, clk := newTestServer(t)
+	sec := makeSecret(t)
+	create(t, ts, sec)
+	claimURL := ts.URL + "/api/secrets/" + sec.id + "/claim"
+	badAuth := "00" + sec.authHex[2:]
+
+	// First wrong attempt is counted (attempts_left 9) and starts a 2s cooldown.
+	code, body := post(t, claimURL, map[string]string{"auth": badAuth})
+	if code != 403 || int(body["attempts_left"].(float64)) != wire.MaxAttempts-1 {
+		t.Fatalf("first wrong: code=%d body=%v", code, body)
+	}
+	// Hammering during the cooldown: all 429, none counted — even with the
+	// correct proof, which is not examined during cooldown.
+	for i := 0; i < 50; i++ {
+		auth := badAuth
+		if i%2 == 0 {
+			auth = sec.authHex
+		}
+		code, body := post(t, claimURL, map[string]string{"auth": auth})
+		if code != 429 || body["retry_after_seconds"] == nil {
+			t.Fatalf("spam %d: code=%d body=%v", i, code, body)
+		}
+	}
+	// After the window: the counter did not move (still 8 left after this one)...
+	clk.Advance(3 * time.Second)
+	if code, body := post(t, claimURL, map[string]string{"auth": badAuth}); code != 403 ||
+		int(body["attempts_left"].(float64)) != wire.MaxAttempts-2 {
+		t.Fatalf("post-cooldown wrong: code=%d body=%v", code, body)
+	}
+	// ...and the correct PIN still works once its cooldown (4s) passes.
+	clk.Advance(5 * time.Second)
+	if code, _ := post(t, claimURL, map[string]string{"auth": sec.authHex}); code != 200 {
+		t.Fatalf("post-cooldown valid claim: code=%d", code)
+	}
+}
+
 // TestConcurrentClaims verifies exactly one winner under parallel valid claims.
 func TestConcurrentClaims(t *testing.T) {
-	ts := newTestServer(t)
+	ts, _ := newTestServer(t)
 	sec := makeSecret(t)
 	create(t, ts, sec)
 	claimURL := ts.URL + "/api/secrets/" + sec.id + "/claim"
@@ -168,7 +228,7 @@ func TestConcurrentClaims(t *testing.T) {
 }
 
 func TestValidation(t *testing.T) {
-	ts := newTestServer(t)
+	ts, _ := newTestServer(t)
 	sec := makeSecret(t)
 	// Oversized ciphertext.
 	big := base64.StdEncoding.EncodeToString(make([]byte, wire.MaxPlaintext+wire.NonceLen+17))
@@ -190,7 +250,7 @@ func TestValidation(t *testing.T) {
 }
 
 func TestStaticPageHeaders(t *testing.T) {
-	ts := newTestServer(t)
+	ts, _ := newTestServer(t)
 	resp, err := http.Get(ts.URL + "/")
 	if err != nil {
 		t.Fatal(err)

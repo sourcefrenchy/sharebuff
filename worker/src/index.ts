@@ -71,6 +71,11 @@ async function handleClaim(request: Request, env: Env, id: string): Promise<Resp
     case 200: return json(200, { ct: res.ct });
     case 403: return json(403, { attempts_left: res.attemptsLeft });
     case 410: return json(410, { reason: res.reason });
+    case 429: {
+      const r = json(429, { retry_after_seconds: res.retryAfterSeconds });
+      r.headers.set('Retry-After', String(res.retryAfterSeconds));
+      return r;
+    }
     default: return err(404, 'not found');
   }
 }

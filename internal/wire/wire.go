@@ -28,7 +28,11 @@ const (
 	rootLen = 64
 
 	MaxPlaintext = 64 * 1024
-	MaxAttempts  = 5
+	MaxAttempts  = 10
+
+	// After the n-th counted wrong attempt, further claims are rejected
+	// (HTTP 429, uncounted) until min(2^n, CooldownMaxSeconds) seconds pass.
+	CooldownMaxSeconds = 300
 
 	DefaultTTLSeconds = 604800
 	MinTTLSeconds     = 60

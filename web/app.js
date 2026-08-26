@@ -133,6 +133,8 @@ if (!frag) {
         finish(text, await copyToClipboard(text));
       } else if (resp.status === 403) {
         setStatus(`Wrong PIN — the secret is untouched. ${body.attempts_left} attempt${body.attempts_left === 1 ? '' : 's'} left.`, 'err');
+      } else if (resp.status === 429) {
+        setStatus(`Too many attempts too quickly — wait ${body.retry_after_seconds}s and try again. (Rushed attempts are ignored, not counted.)`, 'err');
       } else if (resp.status === 410) {
         setStatus(body.reason === 'claimed'
           ? 'This secret was already retrieved and has been destroyed.'

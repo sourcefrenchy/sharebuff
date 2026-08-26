@@ -18,6 +18,9 @@ PIN=$(echo "$OUT" | awk '/^PIN:/{print $2}')
 
 echo "-- wrong PIN must not burn (403)"
 node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 403
+echo "-- immediate retry hits the cooldown (429, uncounted)"
+node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 429
+sleep 3
 echo "-- correct PIN retrieves and decrypts"
 GOT=$(node tests/e2e.mjs "$URL" "$PIN")
 [ "$GOT" = "$PLAINTEXT" ] || { echo "PLAINTEXT MISMATCH"; exit 1; }

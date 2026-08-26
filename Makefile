@@ -1,23 +1,49 @@
 # Sharebuff build & release targets. Binaries are static (CGO_ENABLED=0):
 # the linux build runs on any distro (RHEL included), no glibc dependency.
+#
+#   make all       - cross-compile every platform into dist/ (macos+linux+windows)
+#   make macos     - dist/ binaries for macOS (Apple Silicon + Intel)
+#   make linux     - dist/ binaries for Linux (static, RHEL-compatible)
+#   make windows   - dist/ binaries for Windows
+#   make build     - host-platform dev binaries in the repo root
+#   make test      - go vet + go test -race + JS/Go crypto parity
+#   make e2e       - full local lifecycle against the fallback server
+#   make release   - test, then make all
+#   make deploy    - deploy the Cloudflare Worker (needs wrangler login)
+#   make clean
 
 DIST    := dist
 LDFLAGS := -s -w
-GOBUILD  = CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -trimpath -ldflags '$(LDFLAGS)' -o $(3) $(4)
+GOBUILD  = CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(3) ./cmd/$(4)
 
-BINARIES := sharebuff sharebuff-server
-PLATFORMS := darwin-arm64 darwin-amd64 linux-amd64 windows-amd64
+.PHONY: all macos linux windows build test parity e2e release deploy clean
 
-.PHONY: all build test parity e2e release clean
+all: macos linux windows
+	@ls -lh $(DIST)
 
-all: build
+macos:
+	@mkdir -p $(DIST)
+	$(call GOBUILD,darwin,arm64,sharebuff-darwin-arm64,sharebuff)
+	$(call GOBUILD,darwin,amd64,sharebuff-darwin-amd64,sharebuff)
+	$(call GOBUILD,darwin,arm64,sharebuff-server-darwin-arm64,sharebuff-server)
+	$(call GOBUILD,darwin,amd64,sharebuff-server-darwin-amd64,sharebuff-server)
 
-## Local development build (host platform)
+linux:
+	@mkdir -p $(DIST)
+	$(call GOBUILD,linux,amd64,sharebuff-linux-amd64,sharebuff)
+	$(call GOBUILD,linux,arm64,sharebuff-linux-arm64,sharebuff)
+	$(call GOBUILD,linux,amd64,sharebuff-server-linux-amd64,sharebuff-server)
+	$(call GOBUILD,linux,arm64,sharebuff-server-linux-arm64,sharebuff-server)
+
+windows:
+	@mkdir -p $(DIST)
+	$(call GOBUILD,windows,amd64,sharebuff-windows-amd64.exe,sharebuff)
+	$(call GOBUILD,windows,amd64,sharebuff-server-windows-amd64.exe,sharebuff-server)
+
 build:
 	go build -o sharebuff ./cmd/sharebuff
 	go build -o sharebuff-server ./cmd/sharebuff-server
 
-## Full test suite: Go (with race detector) + JS/Go crypto parity
 test:
 	go vet ./...
 	go test ./... -race -count=1
@@ -26,23 +52,13 @@ test:
 parity:
 	node tests/parity.mjs
 
-## Local end-to-end smoke test against the fallback server
 e2e: build
 	./tests/e2e.sh
 
-## Cross-compiled release binaries: macOS (arm64 + Intel), Linux (RHEL/any), Windows
-release: test
-	rm -rf $(DIST)
-	mkdir -p $(DIST)
-	$(call GOBUILD,darwin,arm64,$(DIST)/sharebuff-darwin-arm64,./cmd/sharebuff)
-	$(call GOBUILD,darwin,amd64,$(DIST)/sharebuff-darwin-amd64,./cmd/sharebuff)
-	$(call GOBUILD,linux,amd64,$(DIST)/sharebuff-linux-amd64,./cmd/sharebuff)
-	$(call GOBUILD,windows,amd64,$(DIST)/sharebuff-windows-amd64.exe,./cmd/sharebuff)
-	$(call GOBUILD,darwin,arm64,$(DIST)/sharebuff-server-darwin-arm64,./cmd/sharebuff-server)
-	$(call GOBUILD,darwin,amd64,$(DIST)/sharebuff-server-darwin-amd64,./cmd/sharebuff-server)
-	$(call GOBUILD,linux,amd64,$(DIST)/sharebuff-server-linux-amd64,./cmd/sharebuff-server)
-	$(call GOBUILD,windows,amd64,$(DIST)/sharebuff-server-windows-amd64.exe,./cmd/sharebuff-server)
-	@ls -lh $(DIST)
+release: test all
+
+deploy:
+	cd worker && CI=true pnpm install && CI=true pnpm exec wrangler deploy
 
 clean:
 	rm -rf $(DIST) sharebuff sharebuff-server

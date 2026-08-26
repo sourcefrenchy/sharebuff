@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -28,22 +29,32 @@ var (
 )
 
 type record struct {
-	ct        []byte
-	verifier  [32]byte
-	attempts  int
-	expiresAt time.Time
-	gone      string // "", "claimed", "burned"
+	ct            []byte
+	verifier      [32]byte
+	attempts      int
+	expiresAt     time.Time
+	nextAllowedAt time.Time
+	gone          string // "", "claimed", "burned"
 }
 
 type store struct {
 	mu     sync.Mutex
 	m      map[string]*record
 	maxTTL time.Duration
+	now    func() time.Time
+}
+
+// cooldown returns the wait imposed after the n-th counted wrong attempt.
+func cooldown(attempts int) time.Duration {
+	if attempts >= 30 || 1<<attempts > wire.CooldownMaxSeconds {
+		return wire.CooldownMaxSeconds * time.Second
+	}
+	return time.Duration(1<<attempts) * time.Second
 }
 
 func (s *store) janitor() {
 	for range time.Tick(time.Minute) {
-		now := time.Now()
+		now := s.now()
 		s.mu.Lock()
 		for id, r := range s.m {
 			if now.After(r.expiresAt) {
@@ -98,7 +109,7 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	verifier, _ := hex.DecodeString(req.Verifier)
-	rec := &record{ct: ct, expiresAt: time.Now().Add(time.Duration(req.TTLSeconds) * time.Second)}
+	rec := &record{ct: ct, expiresAt: s.now().Add(time.Duration(req.TTLSeconds) * time.Second)}
 	copy(rec.verifier[:], verifier)
 
 	s.mu.Lock()
@@ -126,8 +137,9 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
 	rec, ok := s.m[id]
-	if !ok || time.Now().After(rec.expiresAt) {
+	if !ok || now.After(rec.expiresAt) {
 		delete(s.m, id)
 		errJSON(w, http.StatusNotFound, "not found")
 		return
@@ -136,8 +148,17 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusGone, map[string]string{"reason": rec.gone})
 		return
 	}
+	// Cooldown gate: rejected before the proof is examined, and NOT counted —
+	// hammering can neither brute-force the PIN nor burn the secret.
+	if now.Before(rec.nextAllowedAt) {
+		retry := int64(rec.nextAllowedAt.Sub(now).Seconds()) + 1
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
+		writeJSON(w, http.StatusTooManyRequests, map[string]int64{"retry_after_seconds": retry})
+		return
+	}
 	if subtle.ConstantTimeCompare(sum[:], rec.verifier[:]) != 1 {
 		rec.attempts++
+		rec.nextAllowedAt = now.Add(cooldown(rec.attempts))
 		if rec.attempts >= wire.MaxAttempts {
 			// Burn: keep only a tombstone until the original expiry.
 			s.m[id] = &record{gone: "burned", expiresAt: rec.expiresAt}
@@ -183,7 +204,7 @@ func main() {
 	maxTTL := flag.Duration("max-ttl", 168*time.Hour, "maximum secret TTL")
 	flag.Parse()
 
-	s := &store{m: make(map[string]*record), maxTTL: *maxTTL}
+	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now}
 	go s.janitor()
 	mux := newMux(s)
 
