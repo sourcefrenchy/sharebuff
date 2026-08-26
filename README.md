@@ -1,4 +1,8 @@
-# Sharebuff
+<p align="center">
+  <img src="web/logo.svg" width="140" alt="Sharebuff — one-shot encrypted drop">
+</p>
+
+<h1 align="center">Sharebuff</h1>
 
 One-shot, end-to-end-encrypted secret drop for clipboard text **and files**
 (up to 20 MiB). Post with a tiny CLI; the recipient opens a link, types a

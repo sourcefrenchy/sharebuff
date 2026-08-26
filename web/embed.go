@@ -4,5 +4,5 @@ package web
 
 import "embed"
 
-//go:embed index.html style.css app.js scrypt.js
+//go:embed index.html style.css app.js scrypt.js logo.svg
 var FS embed.FS

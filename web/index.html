@@ -7,15 +7,21 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Sharebuff</title>
   <link rel="stylesheet" href="/style.css">
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
 </head>
 <body>
   <main class="card">
-    <h1>Sharebuff</h1>
-    <p class="tagline">One-shot encrypted clipboard drop. Decryption happens in your browser; the server never sees the data or the PIN.</p>
+    <div class="brand">
+      <img src="/logo.svg" alt="" width="46" height="46">
+      <h1>Sharebuff</h1>
+    </div>
+    <p class="tagline">One-shot encrypted drop for text and files. Decryption happens in your browser; the server never sees the data or the PIN.</p>
 
     <section id="state-nosecret" hidden>
-      <p class="status">This link carries no secret. Ask the sender for the full URL — the part after <code>#</code> matters and is never sent to any server.</p>
+      <div class="warnbox" role="alert">
+        <strong>⚠️ This link carries no secret</strong>
+        <p>You opened the bare Sharebuff address. A real share link continues after a <code>#</code> — that part stays in your browser and is never sent to any server. Ask the sender for the complete URL (and the PIN, ideally over a different channel).</p>
+      </div>
     </section>
 
     <section id="state-pin" hidden>
