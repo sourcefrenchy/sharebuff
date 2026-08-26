@@ -32,6 +32,16 @@ GOT=$(node tests/e2e.mjs "$URL" "$PIN")
 echo "-- second claim finds a tombstone (410)"
 node tests/e2e.mjs "$URL" "$PIN" --expect-status 410
 
+echo "== short link, typed by hand (lowercase, no dashes, o/l for 0/1) =="
+OUT=$(printf "short link payload" | post --short)
+URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
+CODE=${URL#*#}
+[ ${#CODE} -eq 31 ] || { echo "short code length ${#CODE}, want 31: $CODE"; exit 1; }
+TYPED=$(printf "%s" "$CODE" | tr "A-Z" "a-z" | tr -d "-" | tr "01" "ol")
+GOT=$(node tests/e2e.mjs "${URL%%#*}#$TYPED" "$(printf "%s" "$PIN" | tr "A-Z" "a-z")")
+[ "$GOT" = "short link payload" ] || { echo "TYPED-CODE MISMATCH: $GOT"; exit 1; }
+echo "-- $CODE typed as $TYPED: OK"
+
 if [ "$(uname)" = "Darwin" ]; then
   echo "== text mode (clipboard via pbcopy/pbpaste) =="
   CLIPTEXT="clipboard payload $$ été"

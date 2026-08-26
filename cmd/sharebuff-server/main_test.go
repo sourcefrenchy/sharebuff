@@ -27,13 +27,16 @@ func makeSecret(t *testing.T) secret {
 
 func makeSecretPayload(t *testing.T, payload []byte) secret {
 	t.Helper()
-	p := wire.NewParams()
+	key := wire.NewKey(false)
 	pin := wire.NewPIN(6)
-	encKey, authKey, err := wire.Derive(p.Key, pin, p.Salt)
+	id, salt, err := wire.Prepare(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := wire.Base58Encode(p.ID)
+	encKey, authKey, err := wire.Derive(key, pin, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	env, err := wire.EncodeEnvelope(wire.Header{T: "file", N: "test.bin", M: "application/octet-stream"}, payload)
 	if err != nil {
 		t.Fatal(err)

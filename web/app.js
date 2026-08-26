@@ -1,53 +1,8 @@
-// Sharebuff retrieve client. Conforms to docs/SPEC.md v1.
-// All cryptography runs locally: scrypt (vendored @noble/hashes) + WebCrypto
-// AES-256-GCM. The URL fragment (id, key, salt) never reaches the server;
-// only the derived claim proof is transmitted, and only when a PIN is
-// deliberately submitted.
-import { scryptAsync } from './scrypt.js';
-
-const SCRYPT = { N: 2 ** 16, r: 8, p: 1, dkLen: 64 };
-const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
-function b58decode(s) {
-  let zeros = 0;
-  while (zeros < s.length && s[zeros] === '1') zeros++;
-  let n = 0n;
-  for (const ch of s) {
-    const v = B58.indexOf(ch);
-    if (v < 0) throw new Error('invalid base58');
-    n = n * 58n + BigInt(v);
-  }
-  const out = [];
-  while (n > 0n) { out.unshift(Number(n & 0xffn)); n >>= 8n; }
-  return new Uint8Array([...new Array(zeros).fill(0), ...out]);
-}
-
-function b64decode(s) {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-const toHex = (u8) => [...u8].map((b) => b.toString(16).padStart(2, '0')).join('');
-
-function normalizePin(pin) {
-  return pin.toUpperCase().replace(/[ -]/g, '')
-    .replaceAll('O', '0').replaceAll('I', '1').replaceAll('L', '1');
-}
-
-function parseFragment(hash) {
-  const m = /^#v2\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)\.([1-9A-HJ-NP-Za-km-z]+)$/.exec(hash);
-  if (!m) return null;
-  try {
-    const key = b58decode(m[2]);
-    const salt = b58decode(m[3]);
-    if (key.length !== 32 || salt.length !== 16) return null;
-    return { id: m[1], key, salt };
-  } catch {
-    return null;
-  }
-}
+// Sharebuff retrieve page. All cryptography lives in crypto.js (shared with
+// the node test harness); this file is only UI flow. The URL fragment (the
+// key code) never reaches the server; only the derived claim proof is
+// transmitted, and only when a PIN is deliberately submitted.
+import { decodeCode, prepare, derive, decrypt, parseEnvelope, b64decode, toHex } from './crypto.js';
 
 const $ = (id) => document.getElementById(id);
 const show = (id) => {
@@ -59,33 +14,13 @@ function setStatus(msg, cls = '') {
   el.className = 'status ' + cls;
 }
 
-async function deriveKeys(frag, pin) {
-  const pinBytes = new TextEncoder().encode(normalizePin(pin));
-  const password = new Uint8Array(frag.key.length + pinBytes.length);
-  password.set(frag.key, 0);
-  password.set(pinBytes, frag.key.length);
-  const root = await scryptAsync(password, frag.salt, SCRYPT);
-  return { enc: root.slice(0, 32), auth: root.slice(32, 64) };
-}
-
-async function decrypt(encKey, id, blob) {
-  const key = await crypto.subtle.importKey('raw', encKey, 'AES-GCM', false, ['decrypt']);
-  const plain = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: blob.slice(0, 12), additionalData: new TextEncoder().encode('sharebuff/v2.' + id) },
-    key,
-    blob.slice(12),
-  );
-  return new Uint8Array(plain);
-}
-
-// Envelope: u32be(header length) || header JSON || payload. See docs/SPEC.md.
-function parseEnvelope(bytes) {
-  if (bytes.length < 4) throw new Error('envelope truncated');
-  const hlen = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0);
-  if (hlen > 4096 || 4 + hlen > bytes.length) throw new Error('envelope header out of bounds');
-  const header = JSON.parse(new TextDecoder().decode(bytes.slice(4, 4 + hlen)));
-  if (header.t !== 'text' && header.t !== 'file') throw new Error('unknown envelope type');
-  return { header, payload: bytes.slice(4 + hlen) };
+function keyFromFragment(hash) {
+  if (!hash || hash.length < 2) return null;
+  try {
+    return decodeCode(decodeURIComponent(hash.slice(1)));
+  } catch {
+    return null;
+  }
 }
 
 function formatSize(n) {
@@ -145,8 +80,8 @@ function finishFile(header, payload) {
   btn.click(); // start the download immediately; button stays for retries
 }
 
-const frag = parseFragment(location.hash);
-if (!frag) {
+const key = keyFromFragment(location.hash);
+if (!key) {
   show('state-nosecret');
 } else {
   show('state-pin');
@@ -156,17 +91,18 @@ if (!frag) {
     const pin = $('pin').value;
     btn.disabled = true;
     try {
-      setStatus('Deriving key locally (memory-hard, ~1 s)…');
-      const keys = await deriveKeys(frag, pin);
+      setStatus('Deriving keys locally (memory-hard, ~2 s)…');
+      const { id, salt } = await prepare(key);
+      const keys = await derive(key, pin, salt);
       setStatus('Requesting the secret…');
-      const resp = await fetch(`/api/secrets/${frag.id}/claim`, {
+      const resp = await fetch(`/api/secrets/${id}/claim`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ auth: toHex(keys.auth) }),
       });
       const body = await resp.json().catch(() => ({}));
       if (resp.status === 200) {
-        const { header, payload } = parseEnvelope(await decrypt(keys.enc, frag.id, b64decode(body.ct)));
+        const { header, payload } = parseEnvelope(await decrypt(keys.enc, id, b64decode(body.ct)));
         if (header.t === 'file') {
           finishFile(header, payload);
         } else {
@@ -182,7 +118,7 @@ if (!frag) {
           ? 'This secret was already retrieved and has been destroyed.'
           : 'This secret was destroyed after too many wrong PINs.', 'err');
       } else if (resp.status === 404) {
-        setStatus('No such secret — it may have expired or never existed.', 'err');
+        setStatus('No such secret — it may have expired, or the code in the link is mistyped.', 'err');
       } else {
         setStatus(`Unexpected server response (${resp.status}). Try again.`, 'err');
       }

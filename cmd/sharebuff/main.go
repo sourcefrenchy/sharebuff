@@ -122,6 +122,7 @@ func main() {
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
+	short := flag.Bool("short", false, "128-bit key: a 26-char code that is easy to type by hand (default 256-bit, 52 chars)")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `sharebuff — one-shot end-to-end-encrypted drop (text & files)
 
@@ -134,6 +135,7 @@ Usage:
   <cmd> | sharebuff             post piped text     (e.g. pbpaste | sharebuff)
   sharebuff --clip              post your clipboard (pbpaste / wl-paste / xclip / Get-Clipboard)
   sharebuff --file report.pdf   post a file, up to 20 MiB
+  sharebuff --short --clip      shorter link (26-char code) for typing on another machine
 
 Flags:
 `)
@@ -165,9 +167,13 @@ needed on their side. Share the URL and the PIN over two different channels.
 		fatalf("input exceeds the %d MiB limit", wire.MaxPayload>>20)
 	}
 
-	p := wire.NewParams()
+	key := wire.NewKey(*short)
 	pin := wire.NewPIN(*pinLen)
-	encKey, authKey, err := wire.Derive(p.Key, pin, p.Salt)
+	id, salt, err := wire.Prepare(key)
+	if err != nil {
+		fatalf("deriving id: %v", err)
+	}
+	encKey, authKey, err := wire.Derive(key, pin, salt)
 	if err != nil {
 		fatalf("deriving keys: %v", err)
 	}
@@ -175,7 +181,6 @@ needed on their side. Share the URL and the PIN over two different channels.
 	if err != nil {
 		fatalf("packing envelope: %v", err)
 	}
-	id := wire.Base58Encode(p.ID)
 	blob, err := wire.Seal(encKey, id, env)
 	if err != nil {
 		fatalf("encrypting: %v", err)
@@ -199,7 +204,7 @@ needed on their side. Share the URL and the PIN over two different channels.
 		fatalf("server returned %s %s", resp.Status, cr.Error)
 	}
 
-	fmt.Printf("URL: %s/#%s\n", base, wire.Fragment(p))
+	fmt.Printf("URL: %s/#%s\n", base, wire.EncodeCode(key))
 	fmt.Printf("PIN: %s\n", pin)
 	what := fmt.Sprintf("text (%s): %s", humanSize(len(plain)), preview(plain))
 	if header.T == "file" {

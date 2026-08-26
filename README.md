@@ -17,9 +17,15 @@ $ sharebuff                          # shows usage (posts nothing)
 $ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows)
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
-URL: https://sharebuff.sharebuff-worker.workers.dev/#v2.<id>.<key>.<salt>
+$ sharebuff --short --clip           # 26-char code, for typing on another machine
+URL: https://sharebuff.sharebuff-worker.workers.dev/#M8Z3Q-7VK2P-…-X
 PIN: 7KQ4TN
 ```
+
+The link carries only the key code — Crockford base32, case-insensitive, dashes
+optional — so it can be read aloud or typed by hand (`--short` gives a
+26-character code like a product key; the default 52-character code keeps the
+full 256-bit, post-quantum-grade key).
 
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
@@ -35,8 +41,11 @@ whichever comes first.
 ## Security model (short version — full spec in [docs/SPEC.md](docs/SPEC.md))
 
 - **End-to-end encrypted**: AES-256-GCM keyed via memory-hard scrypt
-  (N=2^16, r=8, p=1) from a 256-bit random key `K` + the PIN. Encryption and
-  decryption only ever happen on the sender's and recipient's machines.
+  (N=2^16, r=8, p=1) from a random key `K` (256-bit; 128-bit with `--short`)
+  + the PIN. The server-side id and salt are themselves derived from `K`
+  through scrypt, so nothing stored server-side is a cheap oracle for `K`.
+  Encryption and decryption only ever happen on the sender's and
+  recipient's machines.
 - **Zero-knowledge server**: stores `{ciphertext, SHA-256(K_auth)}`. A full
   database dump yields neither plaintext (no `K`) nor a valid claim (needs the
   hash preimage).
@@ -107,7 +116,7 @@ it with `SHAREBUFF_URL`/`--server`.
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--clip] [--file PATH]
+sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--short] [--clip] [--file PATH]
 ```
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped

@@ -1,4 +1,4 @@
-// Package wire implements the Sharebuff v1 crypto and encoding primitives
+// Package wire implements the Sharebuff v3 crypto and encoding primitives
 // shared by the CLI and the fallback server. See docs/SPEC.md.
 package wire
 
@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -18,15 +19,18 @@ import (
 )
 
 const (
-	Version  = "v2"
+	Version  = "v3"
 	IDLen    = 16
-	KeyLen   = 32
 	SaltLen  = 16
 	NonceLen = 12
+
+	KeyLenShort = 16 // --short: 128-bit key, 26-char code
+	KeyLenFull  = 32 // default: 256-bit key, 52-char code
 
 	ScryptN = 1 << 16
 	ScryptR = 8
 	ScryptP = 1
+	preLen  = 32
 	rootLen = 64
 
 	MaxPayload  = 20 << 20                    // user data inside the envelope
@@ -44,10 +48,13 @@ const (
 	MaxTTLSeconds     = 604800
 
 	aadPrefix = "sharebuff/" + Version + "."
+	preSalt   = "sharebuff/" + Version + "/pre"
 )
 
-// PINAlphabet is Crockford base32: no I, L, O, U.
+// PINAlphabet is Crockford base32: no I, L, O, U. Codes use the same alphabet.
 const PINAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+var crockford = base32.NewEncoding(PINAlphabet).WithPadding(base32.NoPadding)
 
 const b58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -112,16 +119,12 @@ func randBytes(n int) []byte {
 	return b
 }
 
-// Params holds the sender-generated per-secret values.
-type Params struct {
-	ID   []byte // IDLen bytes
-	Key  []byte // KeyLen bytes, travels only in the URL fragment
-	Salt []byte // SaltLen bytes
-}
-
-// NewParams generates fresh id/key/salt from crypto/rand.
-func NewParams() Params {
-	return Params{ID: randBytes(IDLen), Key: randBytes(KeyLen), Salt: randBytes(SaltLen)}
+// NewKey generates the secret key K: 32 bytes by default, 16 with short.
+func NewKey(short bool) []byte {
+	if short {
+		return randBytes(KeyLenShort)
+	}
+	return randBytes(KeyLenFull)
 }
 
 // NewPIN generates an n-character PIN from PINAlphabet with unbiased sampling.
@@ -137,11 +140,12 @@ func NewPIN(n int) string {
 	return string(out)
 }
 
-// NormalizePIN uppercases, strips spaces/hyphens, and maps O→0, I→1, L→1.
-func NormalizePIN(pin string) string {
-	pin = strings.ToUpper(pin)
+// NormalizeCode uppercases, strips spaces/hyphens, and maps O→0, I→1, L→1.
+// Used for both PINs and URL codes so they survive being typed by hand.
+func NormalizeCode(s string) string {
+	s = strings.ToUpper(s)
 	var b strings.Builder
-	for _, r := range pin {
+	for _, r := range s {
 		switch r {
 		case ' ', '-':
 		case 'O':
@@ -155,9 +159,64 @@ func NormalizePIN(pin string) string {
 	return b.String()
 }
 
-// Derive runs the spec KDF and returns (encKey, authKey).
+// NormalizePIN is NormalizeCode (kept for readability at call sites).
+func NormalizePIN(pin string) string { return NormalizeCode(pin) }
+
+// EncodeCode renders K as dash-grouped Crockford base32 (5 chars per group).
+func EncodeCode(key []byte) string {
+	raw := crockford.EncodeToString(key)
+	var groups []string
+	for len(raw) > 5 {
+		groups = append(groups, raw[:5])
+		raw = raw[5:]
+	}
+	groups = append(groups, raw)
+	return strings.Join(groups, "-")
+}
+
+// DecodeCode parses a typed code (any case, dashes/spaces optional,
+// O/I/L tolerated) back into a 16- or 32-byte key.
+func DecodeCode(code string) ([]byte, error) {
+	n := NormalizeCode(code)
+	if len(n) != 26 && len(n) != 52 {
+		return nil, errors.New("wire: code must be 26 or 52 characters")
+	}
+	key, err := crockford.DecodeString(n)
+	if err != nil {
+		return nil, errors.New("wire: invalid code character")
+	}
+	if len(key) != KeyLenShort && len(key) != KeyLenFull {
+		return nil, errors.New("wire: bad key length")
+	}
+	// Reject non-canonical encodings (non-zero padding bits) so a code has
+	// exactly one spelling.
+	if crockford.EncodeToString(key) != n {
+		return nil, errors.New("wire: non-canonical code")
+	}
+	return key, nil
+}
+
+func validKey(key []byte) bool {
+	return len(key) == KeyLenShort || len(key) == KeyLenFull
+}
+
+// Prepare is KDF stage A: from K alone, derive the server-side id and the
+// per-secret salt for stage B. It runs scrypt so that a database dump (which
+// contains id) offers only an expensive oracle for guessing K.
+func Prepare(key []byte) (idB58 string, salt []byte, err error) {
+	if !validKey(key) {
+		return "", nil, errors.New("wire: key must be 16 or 32 bytes")
+	}
+	pre, err := scrypt.Key(key, []byte(preSalt), ScryptN, ScryptR, ScryptP, preLen)
+	if err != nil {
+		return "", nil, err
+	}
+	return Base58Encode(pre[0:IDLen]), pre[IDLen : IDLen+SaltLen], nil
+}
+
+// Derive is KDF stage B and returns (encKey, authKey).
 func Derive(key []byte, pin string, salt []byte) (encKey, authKey []byte, err error) {
-	if len(key) != KeyLen || len(salt) != SaltLen {
+	if !validKey(key) || len(salt) != SaltLen {
 		return nil, nil, errors.New("wire: bad key/salt length")
 	}
 	password := append(append([]byte{}, key...), []byte(NormalizePIN(pin))...)
@@ -205,11 +264,6 @@ func Open(encKey []byte, idB58 string, blob []byte) ([]byte, error) {
 		return nil, err
 	}
 	return aead.Open(nil, blob[:NonceLen], blob[NonceLen:], []byte(aadPrefix+idB58))
-}
-
-// Fragment renders the URL fragment for the retrieve page.
-func Fragment(p Params) string {
-	return Version + "." + Base58Encode(p.ID) + "." + Base58Encode(p.Key) + "." + Base58Encode(p.Salt)
 }
 
 // Header describes the envelope payload. It is encrypted alongside the

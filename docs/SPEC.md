@@ -1,4 +1,4 @@
-# Sharebuff wire & crypto specification (v2)
+# Sharebuff wire & crypto specification (v3)
 
 This document is the single source of truth for the protocol. The Go CLI
 (`cmd/sharebuff`), the browser client (`web/app.js`), the Cloudflare Worker
@@ -15,16 +15,17 @@ the encrypted envelope. The secret is destroyed on the **first valid claim**,
 after 10 counted invalid claims (burn), or at TTL expiry — whichever comes
 first.
 
-v2 replaces v1 (envelope + 20 MiB payloads); v1 links are not supported.
+v3 replaces v2 (id/salt derived from the key; typeable key codes; optional 128-bit short keys). Older links are not supported.
 
 ## Parameters
 
 | name    | value                                             |
 |---------|---------------------------------------------------|
-| id      | 16 random bytes, base58-encoded (opaque to server) |
-| K       | 32 random bytes (256-bit), base58-encoded          |
-| PIN     | 6 chars (default) from Crockford base32 alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ` |
-| salt    | 16 random bytes, base58-encoded                    |
+| K       | 32 random bytes (default) or 16 with `--short`; the only secret in the URL |
+| code    | K in Crockford base32 (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`), dash-grouped by 5: 52 or 26 chars |
+| id      | 16 bytes derived from K (KDF stage A), base58 — opaque to the server |
+| salt    | 16 bytes derived from K (KDF stage A)               |
+| PIN     | 6 chars (default) from the same Crockford alphabet |
 | scrypt  | N=2^16, r=8, p=1, dkLen=64 (~64 MiB, memory-hard)  |
 | cipher  | AES-256-GCM, 12-byte random nonce                  |
 | max payload | 20 MiB (20971520 bytes)                        |
@@ -37,20 +38,33 @@ Base58 uses the Bitcoin alphabet
 `123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz` (leading zero
 bytes encode as `1`).
 
-## PIN normalization
+## Code & PIN normalization
 
-Before use, a PIN is normalized: uppercase; strip spaces and hyphens; map
-`O→0`, `I→1`, `L→1`. Generated PINs never contain the ambiguous characters.
+Both the key code and the PIN are typed by humans, so both are normalized
+before use: uppercase; strip spaces and hyphens; map `O→0`, `I→1`, `L→1`.
+Generated codes/PINs never contain the ambiguous characters. A key code must
+decode canonically (zero padding bits) so each key has exactly one spelling.
 
 ## Key derivation
 
 ```
-password = K_bytes (32 raw bytes) || ASCII(normalize(PIN))
-root     = scrypt(password, salt_bytes, N=2^16, r=8, p=1, dkLen=64)
-K_enc    = root[0:32]     AES-256-GCM key (never leaves the client)
-K_auth   = root[32:64]    claim proof (sent to server only on claim)
-verifier = SHA-256(K_auth), lowercase hex (stored by server at create)
+stage A (from K alone — no PIN):
+  pre   = scrypt(K_bytes, ASCII("sharebuff/v3/pre"), N=2^16, r=8, p=1, dkLen=32)
+  id    = base58(pre[0:16])     server-side record key
+  salt  = pre[16:32]
+
+stage B (K + PIN):
+  password = K_bytes || ASCII(normalize(PIN))
+  root     = scrypt(password, salt, N=2^16, r=8, p=1, dkLen=64)
+  K_enc    = root[0:32]     AES-256-GCM key (never leaves the client)
+  K_auth   = root[32:64]    claim proof (sent to server only on claim)
+  verifier = SHA-256(K_auth), lowercase hex (stored by server at create)
 ```
+
+Stage A runs scrypt too, so the id the server stores is only an *expensive*
+oracle for guessing K (no cheap hash-of-key exists anywhere). Keeping the PIN
+out of stage A means a wrong PIN still maps to the right id, so the server
+can count attempts and enforce the cooldown/burn.
 
 The server verifies a claim by computing `SHA-256(auth)` and constant-time
 comparing with the stored verifier. A database dump (ciphertext + verifier)
@@ -78,7 +92,7 @@ envelope = u32_bigendian(len(header)) || header || payload
 
 ```
 nonce = 12 random bytes
-AAD   = ASCII("sharebuff/v2." + id_base58)
+AAD   = ASCII("sharebuff/v3." + id_base58)
 blob  = nonce || AES-256-GCM-Seal(K_enc, nonce, envelope, AAD)
 ct    = standard base64 of blob (with padding)
 ```
@@ -86,8 +100,12 @@ ct    = standard base64 of blob (with padding)
 ## Retrieve URL
 
 ```
-https://<host>/#v2.<id_base58>.<K_base58>.<salt_base58>
+https://<host>/#XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X        (--short, 128-bit)
+https://<host>/#XXXXX-…-XX                            (default, 256-bit)
 ```
+
+The fragment is just the key code; it is case-insensitive and dashes are
+optional, so it can be dictated or typed on another machine.
 
 Everything after `#` is a URL fragment: it is never transmitted to any server
 (not by browsers, link-preview bots, or URL scanners). Opening the link is
@@ -151,9 +169,9 @@ Cache-Control: no-store
 
 ## Client claim flow (web/app.js)
 
-1. Parse fragment `v2.<id>.<K>.<salt>`; reject malformed.
+1. Decode the key code from the fragment; reject malformed.
 2. User types PIN (explicit user action — headless scanners stop here).
-3. `root = scrypt(...)` client-side (~1 s; doubles as proof-of-work).
+3. KDF stages A and B client-side (~2 s; doubles as proof-of-work).
 4. `POST /api/secrets/{id}/claim` with `auth = hex(root[32:64])`.
 5. On 200: decrypt with WebCrypto AES-GCM and parse the envelope. `text` →
    write to the clipboard (fallback: explicit "copy" button) + optional
