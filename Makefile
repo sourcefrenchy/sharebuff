@@ -16,7 +16,24 @@ DIST    := dist
 LDFLAGS := -s -w
 GOBUILD  = CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(3) ./cmd/$(4)
 
-.PHONY: all macos linux windows build test parity e2e release deploy clean
+.DEFAULT_GOAL := help
+.PHONY: help all macos linux windows build test parity e2e release deploy clean
+
+help:
+	@echo "Sharebuff — one-shot end-to-end-encrypted drop (clipboard text & files)"
+	@echo ""
+	@echo "  make build      build ./sharebuff (CLI) and ./sharebuff-server for this machine"
+	@echo "  make all        cross-compile every release binary into dist/ (macOS+Linux+Windows)"
+	@echo "  make macos      release binaries for macOS (Apple Silicon + Intel)"
+	@echo "  make linux      release binaries for Linux (static, RHEL-compatible, amd64+arm64)"
+	@echo "  make windows    release binaries for Windows"
+	@echo "  make test       go vet + unit tests (-race) + JS/Go crypto parity"
+	@echo "  make e2e        full local lifecycle test against the fallback server"
+	@echo "  make release    test, then all"
+	@echo "  make deploy     deploy the Cloudflare Worker (pnpm + wrangler)"
+	@echo "  make clean      remove built binaries and dist/"
+	@echo ""
+	@echo "Quick start:  make build && ./sharebuff"
 
 all: macos linux windows
 	@ls -lh $(DIST)

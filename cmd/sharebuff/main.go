@@ -72,7 +72,8 @@ func readClipboard() ([]byte, error) {
 }
 
 // readInput resolves the payload and its envelope header from, in order of
-// precedence: --file, piped stdin, the system clipboard.
+// precedence: --file, --clip (system clipboard), piped stdin. A bare
+// interactive invocation prints usage instead of silently posting anything.
 func readInput(filePath string, forceClip bool) (wire.Header, []byte) {
 	if filePath != "" {
 		data, err := os.ReadFile(filePath)
@@ -86,20 +87,25 @@ func readInput(filePath string, forceClip bool) (wire.Header, []byte) {
 		}
 		return wire.Header{T: "file", N: name, M: mt}, data
 	}
+	if forceClip {
+		data, err := readClipboard()
+		if err != nil {
+			fatalf("%v", err)
+		}
+		return wire.Header{T: "text"}, data
+	}
 	stat, err := os.Stdin.Stat()
-	piped := err == nil && stat.Mode()&os.ModeCharDevice == 0
-	if piped && !forceClip {
+	if piped := err == nil && stat.Mode()&os.ModeCharDevice == 0; piped {
 		data, err := io.ReadAll(io.LimitReader(os.Stdin, wire.MaxPayload+1))
 		if err != nil {
 			fatalf("reading stdin: %v", err)
 		}
 		return wire.Header{T: "text"}, data
 	}
-	data, err := readClipboard()
-	if err != nil {
-		fatalf("%v", err)
-	}
-	return wire.Header{T: "text"}, data
+	// Interactive, no input selected: teach, don't post.
+	flag.Usage()
+	os.Exit(0)
+	return wire.Header{}, nil // unreachable
 }
 
 // defaultServer is the deployed Cloudflare Worker; override with
@@ -116,6 +122,27 @@ func main() {
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), `sharebuff — one-shot end-to-end-encrypted drop (text & files)
+
+Post a secret and get back a URL plus a one-time PIN. The first valid
+retrieve destroys it on the server (so do 10 wrong PINs, or 7 days).
+Everything is encrypted on this machine: the server never sees the data,
+the filename, or the PIN.
+
+Usage:
+  <cmd> | sharebuff             post piped text     (e.g. pbpaste | sharebuff)
+  sharebuff --clip              post your clipboard (pbpaste / wl-paste / xclip / Get-Clipboard)
+  sharebuff --file report.pdf   post a file, up to 20 MiB
+
+Flags:
+`)
+		flag.PrintDefaults()
+		fmt.Fprintf(flag.CommandLine.Output(), `
+The recipient just opens the URL in a browser and types the PIN — no CLI
+needed on their side. Share the URL and the PIN over two different channels.
+`)
+	}
 	flag.Parse()
 
 	if *server == "" {

@@ -13,7 +13,8 @@ plus a verifier hash and can never decrypt (not even the filename, which
 travels inside the encrypted envelope).
 
 ```
-$ sharebuff                          # sends your clipboard (macOS/Linux/Windows)
+$ sharebuff                          # shows usage (posts nothing)
+$ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows)
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
 URL: https://sharebuff.sharebuff-worker.workers.dev/#v2.<id>.<key>.<salt>
@@ -109,6 +110,7 @@ it with `SHAREBUFF_URL`/`--server`.
 sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--clip] [--file PATH]
 ```
 
-Input precedence: `--file`, then piped stdin, then the system clipboard.
-Payloads are capped at 20 MiB. `URL:` and `PIN:` go to stdout
-(script-friendly); guidance goes to stderr.
+Input precedence: `--file`, then `--clip` (system clipboard), then piped
+stdin; run bare, it prints usage and posts nothing. Payloads are capped at
+20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
+stderr.
