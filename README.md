@@ -8,9 +8,13 @@ only ever stores ciphertext plus a verifier hash and can never decrypt.
 
 ```
 $ pbpaste | sharebuff        # or: sharebuff  (reads the macOS clipboard)
-URL: https://sharebuff.<you>.workers.dev/#v1.<id>.<key>.<salt>
+URL: https://sharebuff.sharebuff-worker.workers.dev/#v1.<id>.<key>.<salt>
 PIN: 7KQ4TN
 ```
+
+The CLI defaults to the deployed Worker
+(`https://sharebuff.sharebuff-worker.workers.dev`); point it elsewhere with
+`SHAREBUFF_URL` or `--server`.
 
 Share the URL and the PIN over **two different channels**. The secret dies on
 the first valid retrieve, after 10 wrong PINs (burn), or after 7 days —

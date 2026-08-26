@@ -56,8 +56,16 @@ func readInput(forceClip bool) []byte {
 	return out
 }
 
+// defaultServer is the deployed Cloudflare Worker; override with
+// SHAREBUFF_URL or --server (e.g. for a self-hosted sharebuff-server).
+const defaultServer = "https://sharebuff.sharebuff-worker.workers.dev"
+
 func main() {
-	server := flag.String("server", os.Getenv("SHAREBUFF_URL"), "server base URL (or SHAREBUFF_URL env)")
+	envOr := os.Getenv("SHAREBUFF_URL")
+	if envOr == "" {
+		envOr = defaultServer
+	}
+	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
 	ttl := flag.Duration("ttl", 168*time.Hour, "time-to-live (1m..168h)")
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
 	clip := flag.Bool("clip", false, "read from the macOS clipboard even when stdin is piped")
