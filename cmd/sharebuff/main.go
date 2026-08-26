@@ -201,12 +201,46 @@ needed on their side. Share the URL and the PIN over two different channels.
 
 	fmt.Printf("URL: %s/#%s\n", base, wire.Fragment(p))
 	fmt.Printf("PIN: %s\n", pin)
-	what := fmt.Sprintf("%d bytes of text", len(plain))
+	what := fmt.Sprintf("text (%s): %s", humanSize(len(plain)), preview(plain))
 	if header.T == "file" {
-		what = fmt.Sprintf("file %q (%d bytes, %s)", header.N, len(plain), header.M)
+		what = fmt.Sprintf("file %q (%s, %s)", header.N, humanSize(len(plain)), header.M)
 	}
-	fmt.Fprintf(os.Stderr, "\nOne-shot secret posted: %s, encrypted locally; the server cannot read it (not even the filename).\n", what)
+	fmt.Fprintf(os.Stderr, "\nPosted %s\nEncrypted locally; the server cannot read it (not even the filename).\n", what)
 	fmt.Fprintf(os.Stderr, "Expires %s, on the first valid retrieve, or after %d wrong PINs.\n",
 		time.Unix(cr.ExpiresAt, 0).Local().Format(time.RFC1123), wire.MaxAttempts)
 	fmt.Fprintf(os.Stderr, "Share the URL and the PIN over two different channels.\n")
+}
+
+// humanSize renders a byte count as B / KiB / MiB.
+func humanSize(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1<<20:
+		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	}
+}
+
+// preview returns a short, single-line glimpse of text (first 40 runes,
+// control characters collapsed to spaces, "…" when truncated) so the user
+// can confirm what was posted without the whole payload hitting the terminal.
+func preview(b []byte) string {
+	const max = 40
+	runes := []rune(strings.ToValidUTF8(string(b), "�"))
+	truncated := len(runes) > max
+	if truncated {
+		runes = runes[:max]
+	}
+	for i, r := range runes {
+		if r < 0x20 || r == 0x7f {
+			runes[i] = ' '
+		}
+	}
+	s := strings.TrimSpace(string(runes))
+	if truncated {
+		s += "…"
+	}
+	return fmt.Sprintf("%q", s)
 }
