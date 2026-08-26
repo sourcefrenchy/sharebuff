@@ -1,0 +1,5 @@
+/sharebuff
+/sharebuff-server
+node_modules/
+worker/.wrangler/
+.DS_Store

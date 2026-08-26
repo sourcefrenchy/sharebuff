@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Sharebuff</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <main class="card">
+    <h1>Sharebuff</h1>
+    <p class="tagline">One-shot encrypted clipboard drop. Decryption happens in your browser; the server never sees the data or the PIN.</p>
+
+    <section id="state-nosecret" hidden>
+      <p class="status">This link carries no secret. Ask the sender for the full URL — the part after <code>#</code> matters and is never sent to any server.</p>
+    </section>
+
+    <section id="state-pin" hidden>
+      <form id="pin-form" autocomplete="off">
+        <label for="pin">Enter the one-time PIN you received</label>
+        <input id="pin" name="pin" type="text" inputmode="text" spellcheck="false"
+               autocapitalize="characters" minlength="6" maxlength="32" required
+               placeholder="e.g. 7KQ4TN">
+        <button id="claim-btn" type="submit">Unlock &amp; copy to clipboard</button>
+      </form>
+      <p class="fine">Retrieving with the correct PIN permanently destroys the secret on the server. A wrong PIN does not (5 attempts allowed).</p>
+      <p id="status" class="status" role="status"></p>
+    </section>
+
+    <section id="state-done" hidden>
+      <p class="status ok" id="done-msg"></p>
+      <button id="copy-btn" hidden>Copy to clipboard</button>
+      <button id="reveal-btn">Reveal secret</button>
+      <textarea id="secret-out" readonly hidden rows="8"></textarea>
+      <p class="fine">The secret has been destroyed on the server. Once you leave this page it is gone.</p>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
