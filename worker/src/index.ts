@@ -103,7 +103,7 @@ const HEX_RE = /^[0-9a-f]{64}$/;
 const MAX_BLOB = 4 + 4096 + 20 * 1024 * 1024 + 12 + 16; // envelope + nonce + tag
 const MAX_CT_B64 = Math.ceil(MAX_BLOB / 3) * 4 + 8;
 const MAX_BODY = 32 * 1024 * 1024;
-const DEFAULT_TTL = 604800;
+const DEFAULT_TTL = 3600;
 
 // Corporate-environment signals (best effort; see docs/SECURITY.md). Any hit
 // makes the page hide the Share tab so company data isn't posted by accident.

@@ -13,7 +13,8 @@ func TestChooseTier(t *testing.T) {
 		want              int
 		wantErr           bool
 	}{
-		{false, false, false, "", 0, false}, // nothing explicit → automatic rule
+		{false, false, false, "", 0, false}, // nothing explicit → tiny
+		{false, false, false, "auto", -1, false},
 		{true, false, false, "", wire.KeyLenTiny, false},
 		{false, true, false, "", wire.KeyLenShort, false},
 		{false, false, true, "tiny", wire.KeyLenFull, false}, // flag beats env
@@ -42,15 +43,15 @@ func TestChooseTierAutoEscalation(t *testing.T) {
 		wantEscalated bool
 	}{
 		{false, 100, "", false, wire.KeyLenTiny, false},
-		{false, AutoEscalateBytes, "", false, wire.KeyLenTiny, false},
-		{false, AutoEscalateBytes + 1, "", false, wire.KeyLenShort, true},
-		{true, 10, "", false, wire.KeyLenShort, true},
-		{true, 10, "", true, wire.KeyLenTiny, false},      // explicit flag wins
-		{true, 10, "tiny", false, wire.KeyLenTiny, false}, // explicit env wins
+		{true, 10, "", false, wire.KeyLenTiny, false}, // default is tiny even for files
+		{false, AutoEscalateBytes + 1, "auto", false, wire.KeyLenShort, true},
+		{true, 10, "auto", false, wire.KeyLenShort, true},
+		{false, AutoEscalateBytes, "auto", false, wire.KeyLenTiny, false},
+		{true, 10, "", true, wire.KeyLenTiny, false}, // explicit flag wins
 		{false, 10, "full", false, wire.KeyLenFull, false},
 	}
 	for i, c := range cases {
-		got, esc, err := chooseTier(c.tiny, false, false, c.env, c.isFile, c.size)
+		got, esc, err := chooseTier(c.tiny, false, false, false, c.env, c.isFile, c.size)
 		if err != nil || got != c.want || esc != c.wantEscalated {
 			t.Fatalf("case %d: got %d esc=%v err=%v, want %d esc=%v", i, got, esc, err, c.want, c.wantEscalated)
 		}

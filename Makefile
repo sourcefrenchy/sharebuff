@@ -86,11 +86,9 @@ integrity:
 jsvectors:
 	node tests/gen-js-vectors.mjs
 
-## Regenerate web/wordlist.js from the CLI wordlist (single source of truth)
+## Regenerate web/wordlist.js from the CLI wordlists (single source of truth)
 wordlist:
-	{ echo "// Generated from cmd/sharebuff/wordlist.txt (EFF long list, 4–8 letters, 6,134 words)."; \
-	  echo "// Regenerate: make wordlist. tests/parity.mjs asserts this matches the Go list."; \
-	  printf "export const WORDS = "; python3 -c "import json;print(json.dumps(open('cmd/sharebuff/wordlist.txt').read().split()))"; echo ";"; } > web/wordlist.js
+	python3 -c "import json,glob,os;d={os.path.basename(f)[:-4]:open(f).read().split() for f in sorted(glob.glob('cmd/sharebuff/words/*.txt'))};open('web/wordlist.js','w').write('// Generated from cmd/sharebuff/words/*.txt by: make wordlist. One ASCII list per language (en = EFF long list filtered; es/fr/it/pt = BIP-39, accents folded), 4-8 letters. tests/parity.mjs asserts these match the Go lists.\nexport const WORDLISTS = '+json.dumps(d)+';\n')"
 
 clean:
 	rm -rf $(DIST) sharebuff sharebuff-server

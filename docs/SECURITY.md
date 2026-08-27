@@ -15,8 +15,8 @@ A **code** is `LOCATOR-KEY`:
 | part | size | who sees it | purpose |
 |---|---|---|---|
 | locator | 5 chars (25 bits), random | the server (it is the record id) | find the record; salt the KDF |
-| key `K` | 40 / 128 / 256 bits (`--tiny` / `--short` / `--full`; **automatic**: tiny for small text, short for files and text > 4 KiB) | **only the sender and recipient** | the secret that actually protects the data |
-| PIN | **4 dictionary words (50.3 bits)** by default; 3 or 6 words, or random characters (`--pin-len N`, 5 bits each; the page offers 16 = 80 bits) | only the sender and recipient | second factor, delivered out-of-band |
+| key `K` | 40 / 128 / 256 bits (`--tiny` **default** / `--short` / `--full`; `--auto` picks short for files and text > 4 KiB) | **only the sender and recipient** | the secret that actually protects the data |
+| PIN | **3 dictionary words, each from a different language, in random order (40.0 bits)** by default; 4 words (52.2) or 6 (77.1), or random characters (`--pin-len N`, 5 bits each; the page offers 16 = 80 bits) | only the sender and recipient | second factor, delivered out-of-band |
 
 Everything the browser needs to decrypt — key and PIN — is entered client-side
 (URL fragment or the page's input boxes). Fragments are never transmitted by
@@ -124,9 +124,8 @@ eventually-consistent outer layer (it is documented as permissive — measured:
 Object (`IPLimiter`, one object per client IP, in-memory windows) as the
 authoritative count, consulted before any per-secret object is touched. That
 bounds locator scanning and burn-by-volume, and means random-locator spam
-instantiates one object per attacker IP rather than one per guessed locator. With 50.3 bits of PIN (or 90+ bits of key+PIN for someone
-who only has the locator), 10 guesses succeed with probability about
-1 in 140 trillion. Online attacks are not the limiting factor in any tier.
+instantiates one object per attacker IP rather than one per guessed locator. With 40 bits of PIN (or 80 bits of key+PIN for someone who only
+has the locator), 10 guesses succeed with probability about 1 in 110 billion. Online attacks are not the limiting factor in any tier.
 
 ## Threat 2 — offline attack after a server breach
 
@@ -137,31 +136,36 @@ scrypt hostile to GPUs and ASICs.
 
 | tier | key | key + PIN | scrypt evaluations to exhaust | at 10⁶ guesses/s (an unrealistic memory-hard farm) |
 |---|---|---|---|---|
-| `--tiny` (small text) | 40 bits | **90.3 bits** | 2⁹⁰·³ ≈ 1.5 × 10²⁷ | ~50 trillion years |
-| `--short` (files, large text) | 128 bits | 178.3 bits | 2¹⁷⁸·³ | beyond physics |
-| `--full` | 256 bits | 306.3 bits | 2³⁰⁶·³ | beyond physics |
+| `--tiny` (default) | 40 bits | **80 bits** | 2⁸⁰ ≈ 1.2 × 10²⁴ | ~38 billion years |
+| `--short` | 128 bits | 168 bits | 2¹⁶⁸ | beyond physics |
+| `--full` | 256 bits | 296 bits | 2²⁹⁶ | beyond physics |
 
 When the attacker *also* holds one of the two factors, the other is all that
 is left:
 
 | attacker also has | must search | `--tiny` | `--short` | `--full` |
 |---|---|---|---|---|
-| the **link** (K known) | PIN, 50.3 bits | 4.4 M core-years — 100 k cores ≈ 44 y | same | same |
+| the **link** (K known) | PIN, 40 bits | 3 500 core-years — 100 k cores ≈ 13 d, a 1 000-GPU farm ≈ 2 d | same | same |
 | the **PIN** | K only | 40 bits: 3 500 core-years — 100 k cores ≈ 13 d, a 1 000-GPU farm ≈ 2 d | 2¹²⁸ — infeasible | 2²⁵⁶ — infeasible |
 
-That second row is why the key size is automatic: anything that is a file or
-larger than 4 KiB gets the 128-bit key, so a leaked PIN alone never unlocks a
-stolen copy of it; the 13-char tiny code is reserved for short clipboard text.
+Both rows are the operator's deliberate trade-off for typeability: the default
+is the 13-char tiny code with a 3-word PIN and a 1-hour lifetime (the short
+window is itself a mitigation — a breach must coincide with an unclaimed
+secret). For anything sensitive use `--auto`/`--short` (files, large text) and
+`--pin-words 4` or `6`, which move every row above to "beyond reach".
 
 Secrets also live at most 7 days and die on first retrieve, so the attacker's
-window is short and most records in a dump are tombstones. Six words
-(`--pin-words 6` → 75 bits) or a 16-character random PIN (80 bits) put the
-leaked-link case beyond reach entirely.
+window is short (1 hour by default) and most records in a dump are
+tombstones. Four words (52 bits), six (77) or a 16-character random PIN (80)
+put the leaked-link case beyond reach entirely.
 
-The PIN is 4 words from a 6,134-word list (the EFF long list, 4–8 letters).
-The list is public — assume the attacker has it; entropy is 4 × log₂(6134).
-Words beat random characters at equal entropy because people type and read
-them aloud correctly; adding more languages only helps by enlarging the pool.
+Each PIN word comes from a different language list — EFF long list (English,
+6,134 words) and BIP-39 Spanish, French, Italian and Portuguese (≈1.9–2.0 k
+each, accents folded to ASCII, 4–8 letters) — in a random language order. The
+lists are public — assume the attacker has them; the entropy is the log of
+the number of ordered language choices times the list sizes: 40.0 bits for
+3 words, 52.2 for 4, 77.1 for 6. Words beat random characters at equal
+entropy because people type and read them aloud correctly.
 
 The `--tiny` number is honest but relies on scrypt staying memory-hard and on
 the PIN being kept apart from the code; if both the code *and* the PIN leak,
@@ -177,7 +181,7 @@ no tier can help — that is the recipient's endpoint, not the protocol.
 - Grover's algorithm gives at most a square-root speed-up on symmetric search.
   For **`--full`** that leaves AES-256 / a 286-bit search at ≥128-bit
   post-quantum strength — the bar NIST accepts for symmetric crypto.
-- For `--short` (178 → ~89 bits) and `--tiny` (90 → ~45 bits), Grover would
+- For `--short` (168 → ~84 bits) and `--tiny` (80 → ~40 bits), Grover would
   have to evaluate *scrypt itself* inside a quantum circuit, keeping 64 MiB of
   state coherent per evaluation, in a sequential search. No known or projected
   hardware makes that practical; still, these tiers sit below the *formal*
@@ -217,7 +221,7 @@ feature will be added that requires transmitting the fragment.
   would store the key. Shorten the hostname instead (custom domain), or type
   the code into the page.
 - **Leaked link**: an adversary with the code but not the PIN gets 10 paced
-  guesses at 50.3 bits; if the link leaks, the sender should assume the secret
+  guesses at 40 bits; if the link leaks, the sender should assume the secret
   may be burned (10 garbage claims) — fail-closed by design.
 
 ## Threat 5 — the public locator

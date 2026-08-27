@@ -4,7 +4,8 @@
 // Run: node tests/parity.mjs   (regenerate vectors: go test ./internal/wire -run TestVectors -update)
 import { readFile } from 'node:fs/promises';
 import { decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex, encrypt, encodeEnvelope } from '../web/crypto.js';
-import { WORDS } from '../web/wordlist.js';
+import { WORDLISTS } from '../web/wordlist.js';
+import { readdir } from 'node:fs/promises';
 
 const vectors = JSON.parse(await readFile(new URL('../internal/wire/testdata/vectors.json', import.meta.url), 'utf8'));
 let failures = 0;
@@ -39,10 +40,15 @@ for (const [i, v] of vectors.entries()) {
   check(i, 'encrypt→decrypt', b64(await decrypt(keys.enc, locator, blob2)), v.envelope_b64);
 }
 
-// The page's wordlist must be the CLI's wordlist, verbatim.
-const goWords = (await readFile(new URL('../cmd/sharebuff/wordlist.txt', import.meta.url), 'utf8')).split(/\s+/).filter(Boolean);
-if (goWords.length !== WORDS.length || goWords.some((w, i) => w !== WORDS[i])) {
-  failures++; console.error(`wordlist MISMATCH: go ${goWords.length} words, js ${WORDS.length}`);
+// The page's wordlists must be the CLI's, verbatim, language by language.
+const dir = new URL('../cmd/sharebuff/words/', import.meta.url);
+for (const f of (await readdir(dir)).filter((n) => n.endsWith('.txt')).sort()) {
+  const lang = f.slice(0, -4);
+  const goWords = (await readFile(new URL(f, dir), 'utf8')).split(/\s+/).filter(Boolean);
+  const js = WORDLISTS[lang] || [];
+  if (goWords.length !== js.length || goWords.some((w, i) => w !== js[i])) {
+    failures++; console.error(`wordlist MISMATCH for ${lang}: go ${goWords.length} words, js ${js.length}`);
+  }
 }
 
 if (failures) { console.error(`FAIL: ${failures} mismatch(es)`); process.exit(1); }

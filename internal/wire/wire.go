@@ -46,7 +46,7 @@ const (
 	// (HTTP 429, uncounted) until min(2^n, CooldownMaxSeconds) seconds pass.
 	CooldownMaxSeconds = 300
 
-	DefaultTTLSeconds = 604800
+	DefaultTTLSeconds = 3600
 	MinTTLSeconds     = 60
 	MaxTTLSeconds     = 604800
 

@@ -127,13 +127,13 @@ Usage:
   sharebuff --file report.pdf   post a file, up to 20 MiB
   sharebuff --full --clip       57-char code with a 256-bit key (formal post-quantum bar)
 
-Code size: small text gets --tiny (13 chars, 40-bit key); files and text over
-4 KiB automatically get --short (31 chars, 128-bit) so a leaked PIN alone can
-never unlock a stolen copy. --full (57 chars, 256-bit) is the formal
-post-quantum bar. Set SHAREBUFF_TIER=tiny|short|full to fix a default.
+Code size: --tiny (13 chars, 40-bit key; the default), --short (31, 128-bit),
+--full (57, 256-bit, the formal post-quantum bar), or --auto (short for files
+and text over 4 KiB). Set SHAREBUFF_TIER=tiny|short|full|auto to fix a default.
 
-PIN: 4 dictionary words by default (e.g. basil-tundra-koala-oxide, 50 bits);
---pin-words 3 or 6, or --pin-len N for N random characters (5 bits each).
+PIN: 3 dictionary words by default, each from a different language in random
+order (e.g. basil-tundra-koala, ~38 bits); --pin-words 4 (~50) or 6, or
+--pin-len N for N random characters. Expiry: 1 hour by default (--ttl).
 
 Flags:
 `)
@@ -151,14 +151,15 @@ func main() {
 		envOr = defaultServer
 	}
 	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
-	ttl := flag.Duration("ttl", 168*time.Hour, "time-to-live (1m..168h)")
-	pinWords := flag.Int("pin-words", 4, "PIN as N dictionary words (6,134-word list, 12.6 bits each; 4 = 50 bits)")
+	ttl := flag.Duration("ttl", time.Hour, "time-to-live (1m..168h)")
+	pinWords := flag.Int("pin-words", 3, "PIN as N dictionary words, each from a different language (3 ≈ 38 bits, 4 ≈ 50)")
 	pinLen := flag.Int("pin-len", 0, "instead of words: PIN as N random characters (min 6, 5 bits each)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
 	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (the default)")
 	short := flag.Bool("short", false, "128-bit key: 31-char code")
 	full := flag.Bool("full", false, "256-bit key: 57-char code, the formal post-quantum bar (docs/SECURITY.md)")
+	auto := flag.Bool("auto", false, "pick the key size from the payload: tiny for small text, short for files or text over 4 KiB")
 	noPreview := flag.Bool("no-preview", false, "do not echo a 40-char preview of the text to the terminal")
 	flag.Usage = usage
 	flag.Parse()
@@ -178,7 +179,7 @@ func main() {
 		fatalf("--pin-words must be at least 2")
 	}
 	header, plain := readInput(*file, *clip)
-	keyLen, escalated, err := chooseTier(*tiny, *short, *full, os.Getenv("SHAREBUFF_TIER"), header.T == "file", len(plain))
+	keyLen, escalated, err := chooseTier(*tiny, *short, *full, *auto, os.Getenv("SHAREBUFF_TIER"), header.T == "file", len(plain))
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -272,18 +273,19 @@ func escalated_reason(isFile bool) string {
 }
 
 // chooseTier resolves the key size: an explicit flag wins, then the
-// SHAREBUFF_TIER environment default; otherwise files and text larger than
-// AutoEscalateBytes get the short (128-bit) key and small text stays tiny.
-// The second result reports whether the automatic escalation kicked in.
-func chooseTier(tiny, short, full bool, env string, isFile bool, size int) (int, bool, error) {
+// SHAREBUFF_TIER environment default (tiny|short|full|auto); the built-in
+// default is tiny. With --auto (or SHAREBUFF_TIER=auto) files and text larger
+// than AutoEscalateBytes get the short (128-bit) key. The second result
+// reports whether that escalation kicked in.
+func chooseTier(tiny, short, full, auto bool, env string, isFile bool, size int) (int, bool, error) {
 	n, err := chooseTierExplicit(tiny, short, full, env)
 	if err != nil {
 		return 0, false, err
 	}
-	if n != 0 {
+	if n > 0 {
 		return n, false, nil
 	}
-	if isFile || size > AutoEscalateBytes {
+	if (auto || n == -1) && (isFile || size > AutoEscalateBytes) {
 		return wire.KeyLenShort, true, nil
 	}
 	return wire.KeyLenTiny, false, nil
@@ -312,6 +314,8 @@ func chooseTierExplicit(tiny, short, full bool, env string) (int, error) {
 	switch strings.ToLower(strings.TrimSpace(env)) {
 	case "":
 		return 0, nil
+	case "auto":
+		return -1, nil
 	case "tiny":
 		return wire.KeyLenTiny, nil
 	case "full":
@@ -319,7 +323,7 @@ func chooseTierExplicit(tiny, short, full bool, env string) (int, error) {
 	case "short":
 		return wire.KeyLenShort, nil
 	}
-	return 0, fmt.Errorf("SHAREBUFF_TIER must be tiny, short or full (got %q)", env)
+	return 0, fmt.Errorf("SHAREBUFF_TIER must be tiny, short, full or auto (got %q)", env)
 }
 
 // humanSize renders a byte count as B / KiB / MiB.

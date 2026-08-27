@@ -66,7 +66,8 @@ body {
 }
 [hidden] { display: none !important; }
 section[role="tabpanel"], #state-created, #state-done {
-  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: auto;
+  padding: 0 2px; margin: 0 -2px; /* room for focus rings inside the scroll box */
 }
 @media (max-width: 30rem) {
   body { padding: .5rem; }
@@ -81,6 +82,7 @@ section[role="tabpanel"], #state-created, #state-done {
 
 h1 { margin: 0; font-size: 1.4rem; letter-spacing: .01em; }
 .brand { display: flex; align-items: center; gap: .7rem; margin-bottom: .2rem; flex: none; }
+.brand .iconbtn { margin-left: auto; }
 .brand img { border-radius: 10px; flex: none; width: 40px; height: 40px; }
 .tagline { margin: 0 0 .6rem; color: var(--muted); font-size: .85rem; max-width: 60ch; flex: none; }
 
@@ -212,6 +214,29 @@ table.stats td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.stats .tag { font-family: ui-monospace, Menlo, monospace; font-size: .8rem; color: var(--muted); }
 .statwrap { overflow-x: auto; }
 h3.sub { font-size: .95rem; margin: .9rem 0 .2rem; }
+
+/* ---- hint overlays ---- */
+.i {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.05em; height: 1.05em; margin-left: .25em; vertical-align: .05em;
+  border-radius: 50%; border: 1px solid var(--border); color: var(--muted);
+  font: 650 .7em/1 ui-rounded, system-ui, sans-serif; cursor: help; user-select: none;
+}
+.i:hover, .i:focus-visible { color: var(--accent); border-color: var(--accent); }
+[data-hint] { cursor: help; }
+button[data-hint], label.filebtn[data-hint], .tabs button[data-hint] { cursor: pointer; }
+#tip {
+  position: fixed; z-index: 1000; max-width: 20rem; padding: .55rem .7rem;
+  background: var(--ink); color: var(--card); border-radius: 10px;
+  font: 500 .82rem/1.4 ui-rounded, -apple-system, system-ui, sans-serif;
+  box-shadow: 0 6px 24px rgb(0 0 0 / .25); pointer-events: none;
+}
+#tip::after {
+  content: ""; position: absolute; width: .6rem; height: .6rem; background: var(--ink);
+  transform: rotate(45deg); left: var(--ax, 50%); margin-left: -.3rem;
+}
+#tip.above::after { bottom: -.3rem; }
+#tip.below::after { top: -.3rem; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: no-preference) { button { transition: background-color .15s; } }

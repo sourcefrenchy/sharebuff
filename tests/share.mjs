@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { createSecret, newWordPin } from '../web/crypto.js';
-import { WORDS } from '../web/wordlist.js';
+import { WORDLISTS } from '../web/wordlist.js';
 
 const args = process.argv.slice(2);
 const base = args[0];
@@ -23,7 +23,7 @@ if (file) {
   payload = new Uint8Array(Buffer.concat(chunks));
   header = { t: 'text' };
 }
-const pin = newWordPin(WORDS, Number(opt('--words', 4)));
+const pin = newWordPin(WORDLISTS, Number(opt('--words', 3)));
 const { code } = await createSecret(base, { header, payload, keyBytes: Number(opt('--tier', 5)), pin });
 console.log(`URL: ${base}/#${code}`);
 console.log(`PIN: ${pin}`);

@@ -19,18 +19,17 @@ $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
 $ sharebuff --full --clip            # 57-char code, 256-bit key (formal post-quantum bar)
 URL: https://s.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
-PIN: basil-tundra-koala-oxide
+PIN: basil-tigre-souple
 ```
 
 The link carries only a **code** — Crockford base32, case-insensitive, dashes
 optional — so it can be read aloud or typed by hand: the recipient can open the
 bare site and enter the code in a box instead of the address bar. Three sizes:
-`--tiny` (13 chars, 40-bit key hardened by the PIN), `--short` (31 chars,
-128-bit) and `--full` (57 chars, 256-bit, the formal post-quantum bar). By
-default the size is **automatic**: short clipboard text gets the 13-char code;
-files and text over 4 KiB get the 128-bit key, so a leaked PIN plus a stolen
-copy is never enough to unlock them. Flags or `SHAREBUFF_TIER=tiny|short|full`
-override. [docs/SECURITY.md](docs/SECURITY.md) has the numbers.
+`--tiny` (13 chars, 40-bit key hardened by the PIN — **the default**), `--short`
+(31 chars, 128-bit) and `--full` (57 chars, 256-bit, the formal post-quantum
+bar); `--auto` (or `SHAREBUFF_TIER=auto`) picks short for files and text over
+4 KiB so a leaked PIN plus a stolen copy is never enough to unlock them.
+[docs/SECURITY.md](docs/SECURITY.md) has the numbers.
 
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
@@ -49,10 +48,12 @@ The CLI defaults to the deployed Worker
 (`https://s.sharebuff-worker.workers.dev`); point it elsewhere with
 `SHAREBUFF_URL` or `--server`.
 
-The PIN is **four dictionary words (50 bits)** — easy to read out loud, and the
-recipient can type them in any case with spaces or dashes. `--pin-words 3` or
-`6`, or `--pin-len N` for random characters. Share the URL and the PIN over **two different channels**. The secret dies on
-the first valid retrieve, after 10 wrong PINs (burn), or after 7 days —
+The PIN is **three dictionary words, each from a different language** (English,
+Spanish, French, Italian, Portuguese, in random order — 40 bits), easy to read
+out loud; the recipient types them in any case with spaces or dashes.
+`--pin-words 4` (52 bits) or `6` (77), or `--pin-len N` for random characters.
+Secrets expire after **1 hour** by default (`--ttl`, up to 7 days). Share the URL and the PIN over **two different channels**. The secret dies on
+the first valid retrieve, after 10 wrong PINs (burn), or when it expires —
 whichever comes first.
 
 ## Security model (short version — full spec in [docs/SPEC.md](docs/SPEC.md))
@@ -186,12 +187,11 @@ Hashes for each tagged release are listed in the release notes.
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-words 4 | --pin-len N] [--tiny|--short|--full] [--clip] [--file PATH] [--no-preview]
+sharebuff [--server URL] [--ttl 1h] [--pin-words 3 | --pin-len N] [--tiny|--short|--full|--auto] [--clip] [--file PATH] [--no-preview]
 ```
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped
 stdin; run bare, it prints usage and posts nothing. Code size comes from the
-flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`), else automatic (tiny for
-small text, short for files and text over 4 KiB). `--no-preview` suppresses
+flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`/`auto`), else tiny. `--no-preview` suppresses
 the 40-char echo of the text. Payloads are capped at 20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
 stderr.

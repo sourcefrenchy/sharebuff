@@ -6,7 +6,7 @@ import {
   decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex,
   createSecret, newWordPin, newCharPin, autoKeyBytes, AUTO_ESCALATE_BYTES,
 } from './crypto.js';
-import { WORDS } from './wordlist.js';
+import { WORDLISTS } from './wordlist.js';
 
 const $ = (id) => document.getElementById(id);
 const PANELS = ['state-share', 'state-created', 'state-pin', 'state-done'];
@@ -34,6 +34,56 @@ const short = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 async function copyToClipboard(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
+
+// ---------------------------------------------------------------- hint overlays
+// One tooltip element, driven by data-hint. Shows on hover and keyboard
+// focus, toggles on tap for touch devices, hides on Escape/leave. It is moved
+// into an open <dialog> when needed so it renders in the top layer.
+const tip = document.createElement('div');
+tip.id = 'tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;
+document.body.append(tip);
+let tipTarget = null;
+function showTip(el) {
+  if (!el?.dataset.hint) return;
+  const host = el.closest('dialog[open]') || document.body;
+  if (tip.parentElement !== host) host.append(tip);
+  tipTarget = el;
+  tip.textContent = el.dataset.hint;
+  tip.hidden = false;
+  el.setAttribute('aria-describedby', 'tip');
+  const r = el.getBoundingClientRect();
+  const margin = 8;
+  const w = Math.min(tip.offsetWidth, innerWidth - 2 * margin);
+  let left = r.left + r.width / 2 - w / 2;
+  left = Math.max(margin, Math.min(left, innerWidth - w - margin));
+  const above = r.top - tip.offsetHeight - 10 >= margin;
+  const top = above ? r.top - tip.offsetHeight - 10 : r.bottom + 10;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+  tip.style.setProperty('--ax', `${Math.max(12, Math.min(r.left + r.width / 2 - left, w - 12))}px`);
+  tip.classList.toggle('above', above);
+  tip.classList.toggle('below', !above);
+  tip.classList.add('on');
+}
+function hideTip() {
+  if (tipTarget) tipTarget.removeAttribute('aria-describedby');
+  tipTarget = null;
+  tip.classList.remove('on');
+  tip.hidden = true;
+}
+const hintOf = (e) => e.target?.closest?.('[data-hint]');
+document.addEventListener('mouseover', (e) => { const t = hintOf(e); if (t && t !== tipTarget) showTip(t); });
+document.addEventListener('mouseout', (e) => { const t = hintOf(e); if (t && !t.contains(e.relatedTarget)) hideTip(); });
+document.addEventListener('focusin', (e) => { const t = hintOf(e); if (t) showTip(t); });
+document.addEventListener('focusout', hideTip);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
+document.addEventListener('click', (e) => {
+  const t = e.target?.closest?.('.i');
+  if (t) { e.preventDefault(); e.stopPropagation(); tipTarget === t ? hideTip() : showTip(t); }
+  else if (tipTarget && matchMedia('(pointer: coarse)').matches) hideTip();
+}, true);
+addEventListener('scroll', hideTip, true);
+addEventListener('resize', hideTip);
 
 // ---------------------------------------------------------------- tabs
 const TABS = ['tab-share', 'tab-retrieve'];
@@ -140,7 +190,7 @@ $('file-clear').addEventListener('click', () => {
 function makePin() {
   const choice = radio('pin');
   if (choice === 'c16') return newCharPin(16);
-  return newWordPin(WORDS, Number(choice.slice(1)));
+  return newWordPin(WORDLISTS, Number(choice.slice(1)));
 }
 
 $('create-btn').addEventListener('click', async () => {
@@ -394,8 +444,16 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 function renderStats(d) {
   const T = d.totals || {};
+  const TILE_HINT = {
+    create: 'Secrets encrypted and uploaded in the last 30 days.',
+    claim_ok: 'Secrets successfully decrypted by their recipient (and destroyed on the server at that moment).',
+    claim_wrong: 'Retrieval attempts with a wrong PIN. The secret stays intact; ten of them burn it.',
+    claim_burned: 'Secrets destroyed after ten wrong PINs — a sign someone was guessing.',
+    refused: 'Uploads refused because the request came from a corporate network (proxy, secure web gateway).',
+    rate_limited: 'Requests over the per-IP limits (10 uploads / 30 retrievals per minute, 60 uploads / 256 MiB per hour).',
+  };
   const tiles = [['create', 'created'], ['claim_ok', 'retrieved'], ['claim_wrong', 'wrong PINs'], ['claim_burned', 'burned'], ['refused', 'refused'], ['rate_limited', 'rate-limited']]
-    .map(([k, l]) => `<div class="tile"><div class="n">${T[k] || 0}</div><div class="l">${l}</div></div>`).join('');
+    .map(([k, l]) => `<div class="tile" tabindex="0" data-hint="${esc(TILE_HINT[k])}"><div class="n">${T[k] || 0}</div><div class="l">${l}</div></div>`).join('');
 
   // Daily bars: creates + retrievals per day, one hue, thin marks, hover title.
   const days = [];
@@ -409,16 +467,25 @@ function renderStats(d) {
     return `<rect x="${x}" y="${H - h}" width="${bw.toFixed(1)}" height="${h}" rx="2" class="${i === 29 ? 'today' : ''}"><title>${days[i]}: ${v} (created + retrieved)</title></rect>`;
   }).join('');
   const chart = `<svg class="chart" viewBox="0 0 ${W} ${H + 1}" role="img" aria-label="Secrets created and retrieved per day, last 30 days">${bars}<line class="axis" x1="0" y1="${H + 0.5}" x2="${W}" y2="${H + 0.5}"/></svg>
-    <p class="chart-cap"><span>${days[0]}</span><span>created + retrieved per day · peak ${max}</span><span>today</span></p>`;
+    <p class="chart-cap"><span>${days[0]}</span><span data-hint="Secrets created plus secrets successfully retrieved, per UTC day. Hover a bar for the exact count.">created + retrieved per day · peak ${max}</span><span>today</span></p>`;
 
+  const HINT = {
+    where: 'Country flag and city as reported by the edge for each request. The IP address itself is never stored.',
+    tag: 'A 6-character keyed hash (HMAC) of the network operator (ASN organization). The same network always gets the same tag, but the tag cannot be turned back into the name — the key is a server secret.',
+    wrong: 'Retrievals with a wrong PIN, plus secrets destroyed after ten wrong PINs.',
+    refused: 'Uploads refused from corporate networks, plus requests over the per-IP limits.',
+    created: 'Secrets uploaded from this place.',
+    retrieved: 'Secrets successfully decrypted from this place.',
+  };
   const rows = Object.entries(d.by_geo || {})
     .map(([g, c]) => { const [cc, city, asn] = g.split('|'); const total = Object.values(c).reduce((a, b) => a + b, 0); return { cc, city, asn, c, total }; })
     .sort((a, b) => b.total - a.total).slice(0, 25)
-    .map((r) => `<tr><td>${flag(r.cc)} ${esc(r.city)}</td><td class="tag">${esc(r.asn)}</td><td class="num">${r.c.create || 0}</td><td class="num">${r.c.claim_ok || 0}</td><td class="num">${(r.c.claim_wrong || 0) + (r.c.claim_burned || 0)}</td><td class="num">${(r.c.refused || 0) + (r.c.rate_limited || 0) + (r.c.volume_limited || 0)}</td></tr>`).join('');
-  const geo = rows ? `<div class="statwrap"><table class="stats"><thead><tr><th>Where</th><th>Network tag</th><th class="num">Created</th><th class="num">Retrieved</th><th class="num">Wrong / burned</th><th class="num">Refused / limited</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="fine">Nothing yet.</p>';
+    .map((r) => `<tr><td>${flag(r.cc)} ${esc(r.city)}</td><td class="tag" data-hint="${esc(HINT.tag)}">${esc(r.asn)}</td><td class="num">${r.c.create || 0}</td><td class="num">${r.c.claim_ok || 0}</td><td class="num">${(r.c.claim_wrong || 0) + (r.c.claim_burned || 0)}</td><td class="num">${(r.c.refused || 0) + (r.c.rate_limited || 0) + (r.c.volume_limited || 0)}</td></tr>`).join('');
+  const th = (label, hint, cls = '') => `<th class="${cls}"><span data-hint="${esc(hint)}" tabindex="0">${label}</span></th>`;
+  const geo = rows ? `<div class="statwrap"><table class="stats"><thead><tr>${th('Where', HINT.where)}${th('Network tag', HINT.tag)}${th('Created', HINT.created, 'num')}${th('Retrieved', HINT.retrieved, 'num')}${th('Wrong / burned', HINT.wrong, 'num')}${th('Refused / limited', HINT.refused, 'num')}</tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="fine">Nothing yet.</p>';
 
   const feed = (d.feed || []).slice(0, 20).map((e) => `<tr><td class="tag">${esc(e.t)}</td><td>${esc(EVENT_LABEL[e.event] || e.event)}${e.reason ? ` <span class="tag">${esc(e.reason)}</span>` : ''}</td><td>${flag(e.cc)} ${esc(e.city)}</td><td class="tag">${esc(e.asn)}</td></tr>`).join('');
-  const feedTable = feed ? `<div class="statwrap"><table class="stats"><thead><tr><th>When (UTC)</th><th>Event</th><th>Where</th><th>Network tag</th></tr></thead><tbody>${feed}</tbody></table></div>` : '<p class="fine">No abnormal events.</p>';
+  const feedTable = feed ? `<div class="statwrap"><table class="stats"><thead><tr>${th('When (UTC)', 'Minute-resolution timestamp; nothing finer is kept.')}${th('Event', 'Only abnormal events are listed here. Successful shares and retrievals are counted but never listed individually.')}${th('Where', HINT.where)}${th('Network tag', HINT.tag)}</tr></thead><tbody>${feed}</tbody></table></div>` : '<p class="fine">No abnormal events.</p>';
 
   $('stats-body').innerHTML = `<div class="tiles">${tiles}</div>${chart}<h3 class="sub">Where from</h3>${geo}<h3 class="sub">Recent abnormal events</h3>${feedTable}`;
 }

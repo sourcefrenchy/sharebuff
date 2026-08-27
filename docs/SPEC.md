@@ -25,14 +25,14 @@ sizes, single KDF stage). Older links are not supported.
 |---------|-------|
 | alphabet | Crockford base32 `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no I/L/O/U) for locators, keys and PINs |
 | locator | 5 random alphabet chars (25 bits); the server-side record id; also the KDF salt |
-| K       | random key: 5 bytes (`--tiny`), 16 bytes (`--short`) or 32 bytes (`--full`); default is automatic — tiny for text ≤ 4096 bytes, short for files and larger text |
+| K       | random key: 5 bytes (`--tiny`, the default), 16 bytes (`--short`) or 32 bytes (`--full`); `--auto` picks short for files and text > 4096 bytes |
 | code    | `locator ‖ base32(K)`, dash-grouped by 5 → 13 / 31 / 57 chars normalized |
-| PIN     | 4 dictionary words joined by `-` (default; 6,134-word list → 50.3 bits; `--pin-words N`) or `--pin-len N` alphabet chars |
+| PIN     | 3 dictionary words joined by `-`, each from a different language list (en/es/fr/it/pt) in random order (default; 40.0 bits; `--pin-words N`) or `--pin-len N` alphabet chars |
 | scrypt  | N=2^16, r=8, p=1, dkLen=64 (~64 MiB, memory-hard) |
 | cipher  | AES-256-GCM, 12-byte random nonce |
 | max payload | 20 MiB (20971520 bytes) |
 | max envelope header | 4096 bytes |
-| TTL     | default 604800 s (7 d), min 60 s, max 604800 s |
+| TTL     | default 3600 s (1 h), min 60 s, max 604800 s (7 d) |
 | attempts| max 10 *counted* invalid claims, then burn |
 | cooldown| after the n-th counted wrong attempt: min(2^n, 300) s; claims inside the window get 429 and are NOT counted |
 
@@ -119,7 +119,7 @@ JSON bodies, `Cache-Control: no-store` on every API response. `id` MUST match
 ### `POST /api/secrets`
 
 Request: `{"id": "<locator>", "ct": "<base64>", "verifier": "<hex>", "ttl_seconds": 604800}`
-(`ttl_seconds` omitted or 0 → the 7-day default)
+(`ttl_seconds` omitted or 0 → the 1-hour default)
 
 - `201` → `{"expires_at": <unix seconds>}`
 - `403` → `{"error": "sharing is disabled on this network", "reasons": [...]}` —

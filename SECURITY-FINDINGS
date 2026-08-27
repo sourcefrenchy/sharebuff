@@ -16,8 +16,8 @@
     "auto_fixable_count": 11,
     "status_counts": {
       "accepted": 1,
-      "fixed": 15,
-      "partial": 1
+      "fixed": 13,
+      "partial": 3
     }
   },
   "c2_exfil_assessment": {
@@ -145,7 +145,7 @@
       "threat_refs": [
         "T2"
       ],
-      "status": "fixed",
+      "status": "partial",
       "fix_type": "code",
       "auto_fixable": true,
       "locations": [
@@ -174,7 +174,7 @@
         "Bit strength is displayed for each PIN option"
       ],
       "verification": "Add a char-PIN vector to tests/parity.mjs; e2e: create a secret with the char PIN and retrieve it successfully.",
-      "resolution": "Default 4 words (50.3 bits) in CLI and web; Share tab offers 3/4/6 words and a 16-char random PIN (80 bits) with bit strengths shown; crypto.js newCharPin. E2E covers a 6-word PIN retrieval; parity covers word PINs.",
+      "resolution": "Web offers 3/4/6-word and 16-char random PINs with bit strengths shown; each word now comes from a different language (en/es/fr/it/pt, random order): 3 words = 40.0 bits, 4 = 52.2, 6 = 77.1. The operator chose 3 words as the default (typeability), accepting T2 at ~40 bits with the 1-hour default lifetime as the compensating control; 4+ words are one click/flag away.",
       "resolved_in": "v4.1 (2026-08-27)"
     },
     {
@@ -185,7 +185,7 @@
       "threat_refs": [
         "T3"
       ],
-      "status": "fixed",
+      "status": "partial",
       "fix_type": "code+doc",
       "auto_fixable": true,
       "locations": [
@@ -214,7 +214,7 @@
         "Docs state the tier guidance"
       ],
       "verification": "e2e: a file share yields a 31-char code; unit test that the default tier depends on payload type/size.",
-      "resolution": "Automatic tier: files and text > 4 KiB (stricter than the suggested 16 KiB) get the 128-bit key in CLI (chooseTier) and web (autoKeyBytes); explicit flag/env/UI overrides; both say which tier was used. Tests: TestChooseTierAutoEscalation; E2E asserts a file gets a 31-char code.",
+      "resolution": "--auto / SHAREBUFF_TIER=auto and the page's Auto option give files and text > 4 KiB the 128-bit key; the operator chose --tiny as the built-in default (typeability) with a 1-hour default lifetime. Docs state the guidance and the residual (THREAT-MODEL #4b).",
       "resolved_in": "v4.1 (2026-08-27)"
     },
     {

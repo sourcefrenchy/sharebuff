@@ -120,16 +120,30 @@ export function randomToken(n) {
 export const newLocator = () => randomToken(LOCATOR_LEN);
 export const newKey = (bytes) => crypto.getRandomValues(new Uint8Array(bytes));
 
-// words uniformly chosen from list (rejection sampling on 13-bit draws so
-// there is no modulo bias), joined by dashes — the CLI's PIN format.
-export function newWordPin(list, words) {
-  if (list.length > 8192) throw new Error('wordlist too large for 13-bit sampling');
-  const out = [];
+// Uniform integer in [0, n) by rejection sampling on 16-bit draws.
+function randBelow(n) {
   const buf = new Uint16Array(1);
-  while (out.length < words) {
+  const limit = 65536 - (65536 % n);
+  for (;;) {
     crypto.getRandomValues(buf);
-    const idx = buf[0] & 0x1fff;
-    if (idx < list.length) out.push(list[idx]);
+    if (buf[0] < limit) return buf[0] % n;
+  }
+}
+
+// A PIN of `words` dictionary words joined by dashes — the CLI's format. Each
+// word comes from a different language (random language order; the cycle
+// restarts with a fresh shuffle when words exceed the number of lists).
+export function newWordPin(lists, words) {
+  const langs = Object.keys(lists).sort();
+  const out = [];
+  let order = [];
+  while (out.length < words) {
+    if (order.length === 0) {
+      order = langs.slice();
+      for (let i = order.length - 1; i > 0; i--) { const j = randBelow(i + 1); [order[i], order[j]] = [order[j], order[i]]; }
+    }
+    const list = lists[order.shift()];
+    out.push(list[randBelow(list.length)]);
   }
   return out.join('-');
 }

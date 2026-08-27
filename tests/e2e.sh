@@ -24,8 +24,8 @@ URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
 CODE=${URL#*#}; NORM=$(printf "%s" "$CODE" | tr -d "-")
 [ ${#NORM} -eq 13 ] || { echo "default tier should be tiny (13 chars), got ${#NORM}: $CODE"; exit 1; }
 echo "-- default tier is tiny: $CODE"
-[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 3 ] || { echo "default PIN should be 4 dash-joined words, got: $PIN"; exit 1; }
-echo "-- default PIN is 4 words: $PIN"
+[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 2 ] || { echo "default PIN should be 3 dash-joined words, got: $PIN"; exit 1; }
+echo "-- default PIN is 3 words: $PIN"
 echo "-- wrong PIN must not burn (403)"
 node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 403
 echo "-- immediate retry hits the cooldown (429, uncounted)"
@@ -64,13 +64,13 @@ if [ "$(uname)" = "Darwin" ]; then
   [ "$GOT" = "$CLIPTEXT" ] || { echo "CLIPBOARD MISMATCH"; exit 1; }
 fi
 
-echo "== file mode (3 MiB binary, byte-exact; auto-escalates to the 128-bit key) =="
+echo "== file mode (3 MiB binary, byte-exact; --auto escalates to the 128-bit key) =="
 head -c 3145728 /dev/urandom > "$TMP/blob.pdf"
-OUT=$(post --file "$TMP/blob.pdf")
+OUT=$(post --file "$TMP/blob.pdf" --auto)
 URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
 CODE=${URL#*#}; NORM=$(printf "%s" "$CODE" | tr -d "-")
-[ ${#NORM} -eq 31 ] || { echo "file should auto-escalate to short (31 chars), got ${#NORM}: $CODE"; exit 1; }
-echo "-- file got the short tier automatically: $CODE"
+[ ${#NORM} -eq 31 ] || { echo "file with --auto should get short (31 chars), got ${#NORM}: $CODE"; exit 1; }
+echo "-- file with --auto got the short tier: $CODE"
 node tests/e2e.mjs "$URL" "$PIN" > "$TMP/blob.out" 2> "$TMP/blob.info"
 grep -q '"t":"file"' "$TMP/blob.info" && grep -q '"n":"blob.pdf"' "$TMP/blob.info" \
   || { echo "FILE HEADER MISSING: $(cat "$TMP/blob.info")"; exit 1; }
