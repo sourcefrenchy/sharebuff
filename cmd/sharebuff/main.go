@@ -235,7 +235,7 @@ func main() {
 			continue
 		}
 		if resp.StatusCode == http.StatusForbidden && len(cr.Reasons) > 0 {
-			fatalf("%s — %s. Use a personal device/network to share (docs/SECURITY.md).", cr.Error, strings.Join(cr.Reasons, "; "))
+			fatalf("%s — %s. This looks like a managed or corporate network, where sharing is not permitted (docs/SECURITY.md).", cr.Error, strings.Join(cr.Reasons, "; "))
 		}
 		fatalf("server returned %s %s", resp.Status, cr.Error)
 	}

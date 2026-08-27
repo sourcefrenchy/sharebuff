@@ -1,7 +1,7 @@
 {
   "generated_by": "make integrity",
   "sha256": {
-    "app.js": "5673798ca0d8fa9decf4e4cc103e1c5eb51f225bf5fa36bd43ec899b1452e079",
+    "app.js": "065766b418f1f3c95230985c7ce8ff46b7bec327e55326f5c02c8080518b5cbd",
     "crypto.js": "14463b9029f385837e06799435f3a0eb6a0ce22ba79c9c84275267a53673b35e",
     "scrypt.js": "dc706d7f0ed6403c24bc4a2a6ce849daa4c1e42390c38b117f8ecf915b941a75",
     "wordlist.js": "f2eb34efba9b29de0adb4b0f511a1ed2a0a5e4b8f110b85991d7e846a45d9379",

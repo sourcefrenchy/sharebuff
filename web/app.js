@@ -141,7 +141,7 @@ function removeShare(reasons, { afterAttempt = false } = {}) {
   for (const id of ['tab-share', 'state-share', 'state-created', 'tabs']) $(id)?.remove();
   const box = $('retrieve-alert');
   box.textContent = (afterAttempt ? 'The server declined to create the link — nothing was uploaded and your text never left this browser. ' : '')
-    + `Sharing isn't available on this device or network (${reasons.join('; ')}). Retrieving works as usual; to share, use a personal device or the CLI.`;
+    + `Sharing is turned off on this network (${reasons.join('; ')}); this looks like a managed or corporate connection, where posting data to an external site isn't allowed. You can still retrieve secrets that were shared with you.`;
   box.hidden = false;
   selectTab('retrieve');
 }

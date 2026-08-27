@@ -99,9 +99,10 @@ on a phone hotspot, or a corporate network without a recognizable gateway,
 looks like home Wi-Fi — device-level enforcement is the organization's MDM/DLP
 job. Signal 1 is the only device-based tell and it stays client-side
 (bypassable). Heuristics can also misfire on a personal device behind a
-corporate proxy (use the CLI from another network). And no matter what,
-an insider can use any other paste site; the goal is that *this* one refuses
-to be the channel from recognizable corporate egress.
+corporate proxy — a false positive, not an invitation to route around the
+control. And no matter what, an insider can use any other paste site; the goal
+is that *this* one refuses to be the channel from recognizable corporate
+egress, whether the request comes from the page or the CLI.
 
 ## Threat 1 — online guessing (someone has the code, not the PIN; or neither)
 
