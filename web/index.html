@@ -15,7 +15,7 @@
       <img src="/logo.svg" alt="" width="46" height="46">
       <h1>Sharebuff</h1>
     </div>
-    <p class="tagline">One-shot encrypted drop for text and files. Encrypted and decrypted in your browser — the server never sees the data, the key, or the PIN.</p>
+    <p class="tagline">One-shot encrypted drop for text and files — encrypted and decrypted in your browser; the server never sees the data, the key, or the PIN.</p>
 
     <div class="tabs" role="tablist" aria-label="Mode" id="tabs">
       <button id="tab-share" role="tab" type="button" aria-selected="true" aria-controls="state-share" tabindex="0">
@@ -32,7 +32,7 @@
     <section id="state-share" role="tabpanel" aria-labelledby="tab-share" tabindex="0" hidden>
       <h2 class="sr-only">Share</h2>
       <label for="share-text">Text to share</label>
-      <textarea id="share-text" rows="10" spellcheck="false" autocomplete="off"
+      <textarea id="share-text" rows="4" spellcheck="false" autocomplete="off"
                 placeholder="Paste here (⌘V / Ctrl+V)…"></textarea>
       <div class="row">
         <button type="button" id="read-clip-btn" class="secondary">Read clipboard</button>
@@ -71,7 +71,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="4" y="11" width="16" height="10" rx="3" fill="currentColor"/><path d="M10.5 16.2l1.2 1.2 2.6-2.8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Create secure link
       </button>
-      <p class="fine">Only ciphertext is uploaded. It self-destructs on the first successful retrieval, after 10 wrong PINs, or when it expires.</p>
+      <p class="fine">Only ciphertext is uploaded; it self-destructs on the first retrieval, after 10 wrong PINs, or when it expires.</p>
       <p id="share-status" class="status" role="status" aria-live="polite"></p>
       <p id="share-error" class="status err" role="alert"></p>
     </section>
@@ -113,7 +113,7 @@
         </div>
         <button id="claim-btn" type="submit" disabled>Unlock &amp; copy to clipboard</button>
       </form>
-      <p class="fine">The right PIN destroys the secret on the server as it is delivered. A wrong PIN doesn't (10 attempts, with a short cooldown after each miss).</p>
+      <p class="fine">The right PIN destroys the secret on the server as it is delivered; a wrong one doesn't (10 attempts, short cooldown after each miss).</p>
       <p id="status" class="status" role="status" aria-live="polite"></p>
       <p id="error" class="status err" role="alert"></p>
     </section>
@@ -125,7 +125,7 @@
       <button id="download-btn" hidden>Download again</button>
       <button id="reveal-btn" hidden>Reveal secret</button>
       <label for="secret-out" class="sr-only">Decrypted secret</label>
-      <textarea id="secret-out" readonly hidden rows="10"></textarea>
+      <textarea id="secret-out" readonly hidden rows="4"></textarea>
       <p class="fine">Destroyed on the server. Once you leave this page it is gone.</p>
     </section>
     <footer class="foot">

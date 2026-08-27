@@ -442,5 +442,5 @@ $('stats-close').addEventListener('click', () => $('stats').close());
 // `curl …/app.js | shasum -a 256` (README, "Verify the page you were served").
 fetch('/integrity.json', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
   const h = j?.sha256?.['app.js'];
-  if (h) $('build').textContent = `Page build ${h.slice(0, 12)} — verify: sha256 of /app.js should start with it.`;
+  if (h) { $('build').textContent = `Build ${h.slice(0, 12)} · sha256 of /app.js starts with it`; $('build').title = `Full SHA-256 of app.js: ${h}`; }
 }).catch(() => {});
