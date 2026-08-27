@@ -110,7 +110,7 @@ func readInput(filePath string, forceClip bool) (wire.Header, []byte) {
 
 // defaultServer is the deployed Cloudflare Worker; override with
 // SHAREBUFF_URL or --server (e.g. for a self-hosted sharebuff-server).
-const defaultServer = "https://sharebuff.sharebuff-worker.workers.dev"
+const defaultServer = "https://s.sharebuff-worker.workers.dev"
 
 func usage() {
 	fmt.Fprintf(flag.CommandLine.Output(), `sharebuff — one-shot end-to-end-encrypted drop (text & files)

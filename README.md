@@ -18,7 +18,7 @@ $ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
 $ sharebuff --full --clip            # 57-char code, 256-bit key (formal post-quantum bar)
-URL: https://sharebuff.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
+URL: https://s.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
 PIN: basil-tundra-koala
 ```
 
@@ -34,7 +34,7 @@ Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
 
 The CLI defaults to the deployed Worker
-(`https://sharebuff.sharebuff-worker.workers.dev`); point it elsewhere with
+(`https://s.sharebuff-worker.workers.dev`); point it elsewhere with
 `SHAREBUFF_URL` or `--server`.
 
 The PIN is three dictionary words (37.7 bits; `--pin-words 4` for 50) — easy to
