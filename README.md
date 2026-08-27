@@ -17,7 +17,7 @@ $ sharebuff                          # shows usage (posts nothing)
 $ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows)
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
-URL: https://s.sharebuff-worker.workers.dev/#4BBZF-TAWN6-YQY
+URL: https://<your-worker>.workers.dev/#4BBZF-TAWN6-YQY
 PIN: uguale-jersey-fogon
 ```
 
@@ -43,9 +43,10 @@ injected `X-Sharebuff-Policy: retrieve-only` header) and the page removes the
 Share tab — so company data isn't posted by accident, and patching the page
 JavaScript changes nothing. Details and limits in [docs/SECURITY.md](docs/SECURITY.md).
 
-The CLI defaults to the deployed Worker
-(`https://s.sharebuff-worker.workers.dev`); point it elsewhere with
-`SHAREBUFF_URL` or `--server`.
+The CLI has **no built-in server** — you point it at your own instance with
+`SHAREBUFF_URL` or `--server` (see *Getting started* below). This repository
+ships no hosted service; deploy your own free Cloudflare Worker, or run the
+self-hosted binary.
 
 The PIN is **three dictionary words, each from a different language** (English,
 Spanish, French, Italian, Portuguese, in random order — 40 bits), easy to read
@@ -54,6 +55,44 @@ out loud; the recipient types them in any case with spaces or dashes.
 Secrets expire after **1 hour** by default (`--ttl`, up to 7 days). Share the URL and the PIN over **two different channels**. The secret dies on
 the first valid retrieve, after 10 wrong PINs (burn), or when it expires —
 whichever comes first.
+
+## Getting started
+
+Sharebuff has no hosted service — you run your own. Two ways:
+
+**A. Cloudflare Worker (free, recommended):**
+
+```
+cd worker
+pnpm install
+pnpm exec wrangler login            # once, opens a browser
+pnpm exec wrangler deploy           # creates <your-worker>.workers.dev
+```
+
+Then point the CLI at it and use it:
+
+```
+export SHAREBUFF_URL=https://<your-worker>.workers.dev   # add to your shell profile
+sharebuff --clip
+```
+
+The Worker needs a Cloudflare account (free tier is enough: Workers + Durable
+Objects). Optional one-time hardening: pick a short account subdomain in the
+dashboard (Workers & Pages → *your subdomain*), and set the alert/stats secrets
+(see *Deploy* and *Metrics and logs* below).
+
+**B. Self-hosted binary (no Cloudflare):**
+
+```
+make build
+./sharebuff-server -addr 127.0.0.1:8091        # behind your own TLS proxy for real use
+export SHAREBUFF_URL=http://127.0.0.1:8091
+sharebuff --clip
+```
+
+The self-hosted server keeps secrets in memory (they don't survive a restart)
+and serves the same page and API. Put it behind an HTTPS-terminating proxy for
+anything beyond local testing.
 
 ## Security model (short version — full spec in [docs/SPEC.md](docs/SPEC.md))
 
@@ -179,7 +218,7 @@ footer shows the first 12 hex characters of the `app.js` hash. Compare against
 what you actually receive — the footer is a convenience, this is the check:
 
 ```
-curl -s https://s.sharebuff-worker.workers.dev/app.js | shasum -a 256
+curl -s https://<your-worker>.workers.dev/app.js | shasum -a 256
 ```
 
 Hashes for each tagged release are listed in the release notes.

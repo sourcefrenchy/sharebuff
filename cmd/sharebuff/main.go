@@ -109,10 +109,6 @@ func readInput(filePath string, forceClip bool) (wire.Header, []byte) {
 	return wire.Header{}, nil // unreachable
 }
 
-// defaultServer is the deployed Cloudflare Worker; override with
-// SHAREBUFF_URL or --server (e.g. for a self-hosted sharebuff-server).
-const defaultServer = "https://s.sharebuff-worker.workers.dev"
-
 func usage() {
 	fmt.Fprintf(flag.CommandLine.Output(), `sharebuff — one-shot end-to-end-encrypted drop (text & files)
 
@@ -132,25 +128,24 @@ Code size: --tiny (13 chars, 40-bit key; the default), --short (31, 128-bit),
 and text over 4 KiB). Set SHAREBUFF_TIER=tiny|short|full|auto to fix a default.
 
 PIN: 3 dictionary words by default, each from a different language in random
-order (e.g. basil-tundra-koala, ~38 bits); --pin-words 4 (~50) or 6, or
+order (e.g. basil-tigre-souple, ~40 bits); --pin-words 4 (~52) or 6, or
 --pin-len N for N random characters. Expiry: 1 hour by default (--ttl).
 
 Flags:
 `)
 	flag.PrintDefaults()
 	fmt.Fprintf(flag.CommandLine.Output(), `
-The recipient opens the URL (or opens the site and types the code) and enters
-the PIN — no CLI needed on their side. Share the code and the PIN over two
-different channels.
+Set SHAREBUFF_URL to your own Sharebuff server (deploy one — see the README);
+there is no default. The recipient opens the URL (or opens the site and types
+the code) and enters the PIN — no CLI needed on their side. Share the code and
+the PIN over two different channels.
 `)
 }
 
 func main() {
-	envOr := os.Getenv("SHAREBUFF_URL")
-	if envOr == "" {
-		envOr = defaultServer
-	}
-	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
+	// No instance is baked in: point the CLI at your own Sharebuff server with
+	// SHAREBUFF_URL or --server (deploy one — see the README).
+	server := flag.String("server", os.Getenv("SHAREBUFF_URL"), "server base URL (or SHAREBUFF_URL env)")
 	ttl := flag.Duration("ttl", time.Hour, "time-to-live (1m..168h)")
 	pinWords := flag.Int("pin-words", 3, "PIN as N dictionary words, each from a different language (3 ≈ 40 bits, 4 ≈ 52)")
 	pinLen := flag.Int("pin-len", 0, "instead of words: PIN as N random characters (min 6, 5 bits each)")
@@ -165,7 +160,7 @@ func main() {
 	flag.Parse()
 
 	if *server == "" {
-		fatalf("no server configured; set SHAREBUFF_URL or pass --server https://…")
+		fatalf("no server configured — deploy your own instance and set SHAREBUFF_URL (or pass --server https://…). See the README.")
 	}
 	base := strings.TrimRight(*server, "/")
 	ttlSec := int64(ttl.Seconds())
