@@ -114,7 +114,7 @@ cd worker
 pnpm install
 pnpm exec wrangler login    # once
 pnpm exec wrangler deploy
-export SHAREBUFF_URL=https://sharebuff.<your-subdomain>.workers.dev
+export SHAREBUFF_URL=https://s.<your-subdomain>.workers.dev   # worker is named "s" for a short host
 ```
 
 **Self-hosted (fallback):** run `dist/sharebuff-server-<platform>` (e.g.
