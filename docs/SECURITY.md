@@ -128,6 +128,11 @@ expected work to hit one is 33.5 M / L × 10 paced requests per hit — a
 nuisance, not a break, and bounded by the 7-day lifetime. A per-IP rate limit
 at the edge is the natural next step if it ever matters.
 
+## One-page attack/timing summary
+
+See [THREAT-MODEL.md](THREAT-MODEL.md) for the scenario table with concrete
+work factors and timings for the `--tiny` default.
+
 ## Out of scope
 
 - Compromised endpoints (malware on the sender's or recipient's machine, a

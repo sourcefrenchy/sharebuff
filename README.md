@@ -85,6 +85,7 @@ whichever comes first.
 | `tests/` | JS↔Go parity test and E2E harness |
 | `docs/SPEC.md` | the protocol spec (source of truth) |
 | `docs/SECURITY.md` | threat model: brute force, offline, quantum — per tier |
+| `docs/THREAT-MODEL.md` | one-page scenario table with work factors and timings |
 
 ## Build & test
 
