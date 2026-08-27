@@ -2,16 +2,22 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sourcefrenchy/sharebuff/internal/wire"
+	"github.com/sourcefrenchy/sharebuff/web"
 )
 
 type secret struct {
@@ -405,6 +411,98 @@ func TestRateLimit(t *testing.T) {
 	clk.Advance(5 * time.Second)
 	if code, body := post(t, claimURL, map[string]string{"auth": sec.authHex}); code != 429 || body["retry_after_seconds"] == nil {
 		t.Fatalf("third claim in window: code=%d body=%v", code, body)
+	}
+}
+
+// TestVolumeCaps: hourly per-IP create count and upload-byte caps (bulk
+// dead-drop guard) answer 429 and reset with the clock.
+func TestVolumeCaps(t *testing.T) {
+	clk := &fakeClock{t: time.Now()}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: false,
+		createRPM: 0, claimRPM: 0, createPerHour: 3, createBytesHour: 0, rl: make(map[string]*window)}
+	ts := httptest.NewServer(newMux(s))
+	defer ts.Close()
+	mk := func() (int, map[string]any) {
+		sec := makeSecret(t)
+		return post(t, ts.URL+"/api/secrets", map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600})
+	}
+	for i := 0; i < 3; i++ {
+		if code, _ := mk(); code != 201 {
+			t.Fatalf("create %d: %d", i, code)
+		}
+	}
+	if code, body := mk(); code != 429 || body["retry_after_seconds"] == nil {
+		t.Fatalf("4th create in the hour: %d %v", code, body)
+	}
+	clk.Advance(61 * time.Minute)
+	if code, _ := mk(); code != 201 {
+		t.Fatal("hour window did not reset")
+	}
+	// Byte cap: size it from a real request body so two fit and the third does not.
+	secs := []secret{makeSecret(t), makeSecret(t), makeSecret(t)}
+	bodyLen := func(sec secret) int64 {
+		b, _ := json.Marshal(map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600})
+		return int64(len(b))
+	}
+	cap := bodyLen(secs[0]) + bodyLen(secs[1]) + bodyLen(secs[2])/2
+	s2 := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: false,
+		createPerHour: 0, createBytesHour: cap, rl: make(map[string]*window)}
+	ts2 := httptest.NewServer(newMux(s2))
+	defer ts2.Close()
+	codes := []int{}
+	for _, sec := range secs {
+		code, _ := post(t, ts2.URL+"/api/secrets", map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600})
+		codes = append(codes, code)
+	}
+	if codes[0] != 201 || codes[1] != 201 || codes[2] != 429 {
+		t.Fatalf("byte cap codes = %v, want 201 201 429", codes)
+	}
+}
+
+// TestNoPushChannels guards the "poor C2" property: the protocol must stay
+// one-shot with no server→client push, poll or subscribe surface.
+func TestNoPushChannels(t *testing.T) {
+	re := regexp.MustCompile(`(?i)websocket|eventsource|text/event-stream|/subscribe|long-?poll`)
+	roots := []string{"../../worker/src", "../../web", "."}
+	for _, root := range roots {
+		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			ext := filepath.Ext(path)
+			if ext != ".go" && ext != ".ts" && ext != ".js" {
+				return nil
+			}
+			b, _ := os.ReadFile(path)
+			if loc := re.FindIndex(b); loc != nil {
+				t.Errorf("%s contains a push/poll primitive (%q); the protocol must stay one-shot", path, string(b[loc[0]:loc[1]]))
+			}
+			return nil
+		})
+	}
+}
+
+// TestIntegrityFresh: web/integrity.json must match the embedded page files,
+// so the footer hash and the published values never go stale.
+func TestIntegrityFresh(t *testing.T) {
+	raw, err := web.FS.ReadFile("integrity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		SHA map[string]string `json:"sha256"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range doc.SHA {
+		b, err := web.FS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("%s listed in integrity.json but not embedded: %v", name, err)
+		}
+		if got := fmt.Sprintf("%x", sha256.Sum256(b)); got != want {
+			t.Fatalf("%s hash is stale — run: make integrity", name)
+		}
 	}
 }
 

@@ -76,10 +76,11 @@ whichever comes first.
   rejects further claims with `429` *before the proof is examined*, and those
   are **not counted**: hammering the endpoint can neither brute-force the PIN
   nor burn the secret by volume.
-- **Rate-limited per IP**: 10 creates and 30 claims per minute — an exact
+- **Rate-limited per IP**: 10 creates and 30 claims per minute, plus 60
+  creates and 256 MiB of uploads per hour (bulk dead-drop guard) — an exact
   per-IP Durable Object behind Cloudflare's (permissive, eventually-consistent)
   Rate Limiting binding, checked before any per-secret object is touched; the
-  Go server has the same limits. Refusals, burns and rate-limit hits are
+  Go server has the same limits (`-create-per-hour`, `-mib-per-hour`). Refusals, burns and rate-limit hits are
   logged as structured events (Workers Logs) and optionally POSTed to an
   `ALERT_WEBHOOK` — never payloads or IPs.
 - **Bot/scanner-proof by construction**: everything secret-specific lives in
@@ -142,7 +143,7 @@ Slack or Discord webhook URL; every `create_refused`, `secret_burned` and
 "country"}` — no payloads, proofs or IPs). The same events always land in
 Workers Logs (observability is on).
 
-**Self-hosted (fallback):** run `dist/sharebuff-server-<platform>` (e.g.
+**Self-hosted (fallback, in-memory — secrets do not survive a restart):** run `dist/sharebuff-server-<platform>` (e.g.
 `-addr 127.0.0.1:8091 -trust-proxy-headers -alert-webhook https://…`) behind
 any TLS-terminating proxy, and point the CLI at it with `SHAREBUFF_URL`/
 `--server`. Flags: `-create-rpm`/`-claim-rpm` (per-IP limits), `-enforce`
@@ -151,8 +152,10 @@ any TLS-terminating proxy, and point the CLI at it with `SHAREBUFF_URL`/
 ## Verify the page you were served
 
 The browser client is first-party JavaScript, so its integrity is what a
-compromised origin would attack. `make integrity` prints the SHA-256 of every
-file the page runs; compare against what you receive:
+compromised origin would attack. `make integrity` writes `web/integrity.json`
+(SHA-256 of every page file; a test fails if it goes stale) and the page
+footer shows the first 12 hex characters of the `app.js` hash. Compare against
+what you actually receive — the footer is a convenience, this is the check:
 
 ```
 curl -s https://s.sharebuff-worker.workers.dev/app.js | shasum -a 256

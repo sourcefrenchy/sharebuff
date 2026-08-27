@@ -128,25 +128,42 @@ export class Secret extends DurableObject {
 export class IPLimiter extends DurableObject {
   private windows = new Map<string, { start: number; count: number }>();
 
+  // Fixed window: returns seconds to wait when adding `add` would exceed max.
+  private take(name: string, max: number, periodMs: number, add: number, now: number): number {
+    const w = this.windows.get(name);
+    if (!w || now - w.start >= periodMs) {
+      this.windows.set(name, { start: now, count: add });
+      return 0;
+    }
+    if (w.count + add > max) return Math.ceil((w.start + periodMs - now) / 1000);
+    w.count += add;
+    return 0;
+  }
+
+  // GET /limit?bucket=&max=&period=[&hmax=&hbytes=&bytes=]
+  //   bucket/max/period : per-minute request window (always)
+  //   hmax              : requests per hour (create only)
+  //   hbytes + bytes    : upload bytes per hour and this request's size
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const bucket = url.searchParams.get('bucket') ?? 'default';
-    const max = Number(url.searchParams.get('max') ?? '60');
-    const period = Number(url.searchParams.get('period') ?? '60') * 1000;
+    const q = (k: string, d: string) => url.searchParams.get(k) ?? d;
+    const bucket = q('bucket', 'default');
     const now = Date.now();
-    // Opportunistic cleanup keeps the map bounded.
     if (this.windows.size > 64) {
-      for (const [k, w] of this.windows) if (now - w.start >= period) this.windows.delete(k);
+      for (const [k, w] of this.windows) if (now - w.start >= 3_600_000) this.windows.delete(k);
     }
-    const w = this.windows.get(bucket);
-    if (!w || now - w.start >= period) {
-      this.windows.set(bucket, { start: now, count: 1 });
-      return json(200, { allowed: true });
+    let wait = this.take(bucket, Number(q('max', '60')), Number(q('period', '60')) * 1000, 1, now);
+    if (wait) return json(200, { allowed: false, limit: 'per_minute', retry_after_seconds: wait });
+    const hmax = Number(q('hmax', '0'));
+    if (hmax > 0) {
+      wait = this.take(`${bucket}:hour`, hmax, 3_600_000, 1, now);
+      if (wait) return json(200, { allowed: false, limit: 'per_hour', retry_after_seconds: wait });
     }
-    if (w.count >= max) {
-      return json(200, { allowed: false, retry_after_seconds: Math.ceil((w.start + period - now) / 1000) });
+    const hbytes = Number(q('hbytes', '0'));
+    if (hbytes > 0) {
+      wait = this.take(`${bucket}:bytes`, hbytes, 3_600_000, Number(q('bytes', '0')), now);
+      if (wait) return json(200, { allowed: false, limit: 'bytes_per_hour', retry_after_seconds: wait });
     }
-    w.count++;
     return json(200, { allowed: true });
   }
 }

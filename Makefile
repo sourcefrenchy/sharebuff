@@ -74,12 +74,13 @@ e2e: build
 
 release: test all
 
-deploy:
+deploy: integrity
 	cd worker && CI=true pnpm install && CI=true pnpm exec wrangler deploy
 
-## Print SHA-256 of the page scripts so a served copy can be verified (README)
+## Write web/integrity.json (SHA-256 of every page file) and print it; the
+## page footer shows the app.js prefix, README explains how to verify.
 integrity:
-	@cd web && shasum -a 256 app.js crypto.js scrypt.js wordlist.js index.html style.css
+	@python3 -c "import hashlib,json;fs=['app.js','crypto.js','scrypt.js','wordlist.js','style.css','index.html'];d={'generated_by':'make integrity','sha256':{f:hashlib.sha256(open('web/'+f,'rb').read()).hexdigest() for f in fs}};open('web/integrity.json','w').write(json.dumps(d,indent=2)+'\n');print(json.dumps(d['sha256'],indent=2))"
 
 ## Regenerate browser-encrypted vectors that the Go tests must decrypt
 jsvectors:

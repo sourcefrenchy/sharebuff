@@ -17,6 +17,9 @@ interface Env {
   SHARE_POLICY?: string;
   // Optional secret: POST JSON alert events here (ntfy, Slack, Discord…). Never payloads or IPs.
   ALERT_WEBHOOK?: string;
+  // Per-IP hourly create caps (bulk dead-drop guard); defaults 60 and 256.
+  CREATE_PER_HOUR?: string;
+  CREATE_MIB_PER_HOUR?: string;
 }
 
 // alert writes a structured event to Workers Logs and, if configured, to the
@@ -33,27 +36,36 @@ const clientIP = (request: Request) => request.headers.get('cf-connecting-ip') ?
 
 const LIMITS = { create: { max: 10, period: 60 }, claim: { max: 30, period: 60 } } as const;
 
-// Returns 0 when allowed, else the seconds to wait. Layer 1 is Cloudflare's
-// eventually-consistent binding (cheap, catches sustained floods); layer 2 is
-// the exact per-IP Durable Object. Both fail open — but loudly.
-async function rateLimited(env: Env, request: Request, bucket: keyof typeof LIMITS): Promise<number> {
+// Returns {wait: 0} when allowed, else the seconds to wait and which limit
+// hit. Layer 1 is Cloudflare's eventually-consistent binding (cheap, catches
+// sustained floods); layer 2 is the exact per-IP Durable Object, which also
+// enforces the hourly create count and upload-volume caps (bulk dead-drop
+// guard). Both fail open — but loudly.
+async function rateLimited(env: Env, request: Request, bucket: keyof typeof LIMITS): Promise<{ wait: number; limit: string }> {
   const ip = clientIP(request);
   const binding = bucket === 'create' ? env.CREATE_LIMIT : env.CLAIM_LIMIT;
   try {
-    if (binding && !(await binding.limit({ key: ip })).success) return LIMITS[bucket].period;
+    if (binding && !(await binding.limit({ key: ip })).success) return { wait: LIMITS[bucket].period, limit: 'per_minute' };
   } catch (e) {
     console.error(JSON.stringify({ event: 'ratelimit_error', layer: 'binding', message: String(e) }));
   }
   try {
     const stub = env.IPLIMIT.get(env.IPLIMIT.idFromName(ip));
     const { max, period } = LIMITS[bucket];
-    const res = await stub.fetch(`https://do/limit?bucket=${bucket}&max=${max}&period=${period}`);
-    const body = (await res.json()) as { allowed: boolean; retry_after_seconds?: number };
-    if (!body.allowed) return body.retry_after_seconds ?? period;
+    let qs = `bucket=${bucket}&max=${max}&period=${period}`;
+    if (bucket === 'create') {
+      const hmax = Number(env.CREATE_PER_HOUR ?? '60');
+      const hbytes = Math.round(Number(env.CREATE_MIB_PER_HOUR ?? '256') * 1024 * 1024);
+      const bytes = Number(request.headers.get('content-length') ?? '0');
+      qs += `&hmax=${hmax}&hbytes=${hbytes}&bytes=${bytes}`;
+    }
+    const res = await stub.fetch(`https://do/limit?${qs}`);
+    const body = (await res.json()) as { allowed: boolean; limit?: string; retry_after_seconds?: number };
+    if (!body.allowed) return { wait: body.retry_after_seconds ?? period, limit: body.limit ?? 'per_minute' };
   } catch (e) {
     console.error(JSON.stringify({ event: 'ratelimit_error', layer: 'do', message: String(e) }));
   }
-  return 0;
+  return { wait: 0, limit: '' };
 }
 
 function tooMany(retry: number): Response {
@@ -151,10 +163,10 @@ async function handleCreate(request: Request, env: Env, ctx: ExecutionContext): 
       return json(403, { error: 'sharing is disabled on this network', reasons: e.reasons });
     }
   }
-  const wait = await rateLimited(env, request, 'create');
-  if (wait) {
-    alert(env, ctx, 'rate_limited', { bucket: 'create' });
-    return tooMany(wait);
+  const rl = await rateLimited(env, request, 'create');
+  if (rl.wait) {
+    alert(env, ctx, rl.limit === 'per_minute' ? 'rate_limited' : 'volume_limited', { bucket: 'create', limit: rl.limit });
+    return tooMany(rl.wait);
   }
   const body = await readJSON(request, MAX_BODY);
   if (!body) return err(400, 'malformed body');
@@ -178,10 +190,10 @@ async function handleClaim(request: Request, env: Env, ctx: ExecutionContext, id
   if (!ID_RE.test(id)) return err(400, 'malformed id');
   // Rate-limit before touching a Durable Object: random-locator spam must not
   // instantiate objects (cost amplification) or burn secrets by volume.
-  const wait = await rateLimited(env, request, 'claim');
-  if (wait) {
-    alert(env, ctx, 'rate_limited', { bucket: 'claim' });
-    return tooMany(wait);
+  const rl = await rateLimited(env, request, 'claim');
+  if (rl.wait) {
+    alert(env, ctx, 'rate_limited', { bucket: 'claim', limit: rl.limit });
+    return tooMany(rl.wait);
   }
   const body = await readJSON(request, 4096);
   const auth = body?.auth;

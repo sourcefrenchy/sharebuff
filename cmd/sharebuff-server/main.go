@@ -50,14 +50,17 @@ type store struct {
 
 	// Per-IP fixed-window rate limits (requests per minute); 0 disables.
 	createRPM, claimRPM int
-	trustProxy          bool // honour X-Real-IP / X-Forwarded-For for the client IP
-	rl                  map[string]*window
-	alertWebhook        string
+	// Per-IP hourly create caps (bulk dead-drop guard); 0 disables.
+	createPerHour   int
+	createBytesHour int64
+	trustProxy      bool // honour X-Real-IP / X-Forwarded-For for the client IP
+	rl              map[string]*window
+	alertWebhook    string
 }
 
 type window struct {
 	start time.Time
-	count int
+	count int64
 }
 
 // clientIP returns the address used for rate limiting.
@@ -77,23 +80,39 @@ func (s *store) clientIP(r *http.Request) string {
 	return host
 }
 
-// allow applies a per-IP fixed window of rpm requests per minute for the
-// given bucket. Caller must hold s.mu.
-func (s *store) allow(bucket, ip string, rpm int, now time.Time) (ok bool, retryAfter int) {
-	if rpm <= 0 {
+// take applies a fixed window of max units per period for key, adding add
+// units. Returns ok=false with the seconds to wait when the window is full.
+// Caller must hold s.mu.
+func (s *store) take(key string, max, add int64, period time.Duration, now time.Time) (ok bool, retryAfter int) {
+	if max <= 0 {
 		return true, 0
 	}
-	key := bucket + "|" + ip
 	w := s.rl[key]
-	if w == nil || now.Sub(w.start) >= time.Minute {
-		s.rl[key] = &window{start: now, count: 1}
+	if w == nil || now.Sub(w.start) >= period {
+		s.rl[key] = &window{start: now, count: add}
 		return true, 0
 	}
-	if w.count >= rpm {
-		return false, int(time.Minute-now.Sub(w.start))/int(time.Second) + 1
+	if w.count+add > max {
+		return false, int((period-now.Sub(w.start))/time.Second) + 1
 	}
-	w.count++
+	w.count += add
 	return true, 0
+}
+
+// allow applies the per-minute request limit for a bucket.
+func (s *store) allow(bucket, ip string, rpm int, now time.Time) (bool, int) {
+	return s.take(bucket+"|"+ip, int64(rpm), 1, time.Minute, now)
+}
+
+// allowVolume applies the hourly create-count and upload-byte caps.
+func (s *store) allowVolume(ip string, bytes int64, now time.Time) (ok bool, retryAfter int, limit string) {
+	if ok, retry := s.take("createh|"+ip, int64(s.createPerHour), 1, time.Hour, now); !ok {
+		return false, retry, "per_hour"
+	}
+	if ok, retry := s.take("createb|"+ip, s.createBytesHour, bytes, time.Hour, now); !ok {
+		return false, retry, "bytes_per_hour"
+	}
+	return true, 0, ""
 }
 
 // alert emits a structured event to the log and, if configured, to the
@@ -198,7 +217,7 @@ func (s *store) janitor() {
 			}
 		}
 		for k, w := range s.rl {
-			if now.Sub(w.start) >= 2*time.Minute {
+			if now.Sub(w.start) >= 2*time.Hour {
 				delete(s.rl, k)
 			}
 		}
@@ -232,11 +251,20 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	ip := s.clientIP(r)
 	s.mu.Lock()
-	ok, retry := s.allow("create", s.clientIP(r), s.createRPM, s.now())
+	ok, retry := s.allow("create", ip, s.createRPM, s.now())
+	limit := "per_minute"
+	if ok {
+		ok, retry, limit = s.allowVolume(ip, r.ContentLength, s.now())
+	}
 	s.mu.Unlock()
 	if !ok {
-		s.alert("rate_limited", map[string]any{"bucket": "create"})
+		event := "rate_limited"
+		if limit != "per_minute" {
+			event = "volume_limited"
+		}
+		s.alert(event, map[string]any{"bucket": "create", "limit": limit})
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many requests", "retry_after_seconds": retry})
 		return
@@ -374,12 +402,15 @@ func main() {
 	enforce := flag.Bool("enforce", true, "refuse creation on corporate-network signals (proxy headers, HTTP/1.x from a modern browser); false = report only via /api/env")
 	createRPM := flag.Int("create-rpm", 10, "per-IP creates per minute (0 = unlimited)")
 	claimRPM := flag.Int("claim-rpm", 30, "per-IP claims per minute (0 = unlimited)")
+	createPerHour := flag.Int("create-per-hour", 60, "per-IP creates per hour (0 = unlimited)")
+	mibPerHour := flag.Int("mib-per-hour", 256, "per-IP upload MiB per hour (0 = unlimited)")
 	trustProxy := flag.Bool("trust-proxy-headers", false, "use X-Real-IP / X-Forwarded-For as the client IP (only behind a proxy you control)")
 	alertWebhook := flag.String("alert-webhook", "", "POST JSON alert events (create_refused, secret_burned, rate_limited) to this URL")
 	flag.Parse()
 
 	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share, enforce: *enforce,
-		createRPM: *createRPM, claimRPM: *claimRPM, trustProxy: *trustProxy, rl: make(map[string]*window), alertWebhook: *alertWebhook}
+		createRPM: *createRPM, claimRPM: *claimRPM, createPerHour: *createPerHour, createBytesHour: int64(*mibPerHour) << 20,
+		trustProxy: *trustProxy, rl: make(map[string]*window), alertWebhook: *alertWebhook}
 	go s.janitor()
 	mux := newMux(s)
 

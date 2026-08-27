@@ -17,7 +17,7 @@
     { "tag": "v1", "new_sqlite_classes": ["Secret"] },
     { "tag": "v2", "new_sqlite_classes": ["IPLimiter"] }
   ],
-  "vars": { "SHARE_POLICY": "enforce" },
+  "vars": { "SHARE_POLICY": "enforce", "CREATE_PER_HOUR": "60", "CREATE_MIB_PER_HOUR": "256" },
   "ratelimits": [
     { "name": "CREATE_LIMIT", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
     { "name": "CLAIM_LIMIT",  "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }

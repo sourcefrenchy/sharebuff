@@ -1,0 +1,671 @@
+{
+  "schema": "sharebuff.security-findings/v1",
+  "generated": "2026-08-27",
+  "repo": "github.com/sourcefrenchy/sharebuff",
+  "source_report": "docs/THREAT-REVIEW.md",
+  "how_to_use": "Each finding is self-contained. A fixing session should iterate `findings[]` ordered by severity (critical>high>medium>low>info), apply `recommended_fix` at `locations[]`, then confirm every item in `acceptance[]` via `verification`. `auto_fixable=true` means the change is fully in-repo (code/doc/config); false means it needs Cloudflare dashboard, org process, or external controls.",
+  "summary": {
+    "total": 17,
+    "by_severity": {
+      "critical": 1,
+      "high": 4,
+      "medium": 4,
+      "low": 6,
+      "info": 2
+    },
+    "auto_fixable_count": 11,
+    "status_counts": {
+      "accepted": 1,
+      "fixed": 15,
+      "partial": 1
+    }
+  },
+  "c2_exfil_assessment": {
+    "usable_as_c2": "low",
+    "conclusion": "Sharebuff is a poor C2 channel and its intended function is a one-shot exfil dead-drop. It cannot be used for persistent C2: claim is one-shot (the record is tombstoned BEFORE the ciphertext is returned, so there is no state to poll), there is no server->client push (no websocket/SSE/long-poll/subscribe endpoint), the code rides in the URL fragment so the server never sees the key/PIN and cannot track who opened a link, and the Worker is not an open proxy (it only routes /api/* and static assets). Using it as C2 would require repeated high-bandwidth creates (easily detected at egress) plus out-of-band delivery of link+PIN to the agent.",
+    "residual_risks": [
+      "Origin compromise turns the page into a C2 landing / JS beacon (SB-006)",
+      "Bulk exfil dead-drop: many 20 MiB creates from one identity, even from allow-listed egress (SB-014)",
+      "Very slow covert out-of-band signaling via locator liveness 404/403/410 (SB-017)",
+      "Insider exfil via non-monitored egress because corporate mode is fail-open (SB-001)"
+    ],
+    "related_findings": [
+      "SB-001",
+      "SB-002",
+      "SB-005",
+      "SB-006",
+      "SB-014",
+      "SB-015",
+      "SB-016",
+      "SB-017"
+    ]
+  },
+  "findings": [
+    {
+      "id": "SB-001",
+      "title": "Corporate mode is fail-open; add a fail-closed egress allow-list",
+      "severity": "critical",
+      "category": "exfil",
+      "threat_refs": [
+        "T1"
+      ],
+      "status": "accepted",
+      "fix_type": "code+config",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "worker/src/index.ts",
+          "lines": "41-56",
+          "symbol": "environment()"
+        },
+        {
+          "file": "worker/src/index.ts",
+          "lines": "96-118",
+          "symbol": "handleCreate()"
+        },
+        {
+          "file": "worker/wrangler.jsonc",
+          "lines": "14",
+          "symbol": "vars.SHARE_POLICY"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "85-108",
+          "symbol": "(*store).signals"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "148-200",
+          "symbol": "(*store).create"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "280-285",
+          "symbol": "main flags"
+        }
+      ],
+      "description": "Creation is refused only when a KNOWN corporate signal is present (SWG egress ASN, proxy-stamped headers, modern browser over HTTP/1.x, X-Sharebuff-Policy). Any unrecognizable egress (phone hotspot, personal non-MDM device, on-prem SWG that does not stamp a recognized header) is allowed. A rogue employee exfiltrates via a hotspot or personal device.",
+      "evidence": "worker/src/index.ts:98 gates on SHARE_POLICY then calls environment(), which returns share=true whenever reasons.length===0 (line 55). There is no allow-list; unknown network = allowed (fail-open).",
+      "recommended_fix": "Add a corporate mode (Worker var SHARE_MODE=corporate / Go flag -mode=corporate) that INVERTS the logic: creation is allowed only if the egress ASN (cf.asOrganization) or source IP/CIDR matches an allow-list (vars SHARE_ALLOW_ASNS, SHARE_ALLOW_NETS); everything else returns 403 and stores nothing. Keep the current blocklist as the default 'public' mode so consumer use is unchanged. In corporate mode, also emit a log/alert on every refusal (see SB-002).",
+      "acceptance": [
+        "In corporate mode, a create from a non-allow-listed ASN/IP returns 403 and stores nothing",
+        "In corporate mode, a create from an allow-listed ASN/IP returns 201",
+        "In public (default) mode, behavior is unchanged (blocklist only)"
+      ],
+      "verification": "Add Go test TestCorporateAllowList (mock signals) and a Worker test with a mocked cf.asOrganization; assert 403 for non-allow-listed and 201 for allow-listed in corporate mode, and unchanged behavior in public mode.",
+      "resolution": "Declined by the operator (network control either way; hotspot/personal-device bypass is MDM/DLP territory). Blocklist enforcement + alerting ship instead; rationale recorded in docs/SECURITY.md.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-002",
+      "title": "Exfiltration refusals and claim anomalies are not logged or alerted",
+      "severity": "high",
+      "category": "logging",
+      "threat_refs": [
+        "T1",
+        "T8"
+      ],
+      "status": "fixed",
+      "fix_type": "code",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "worker/src/index.ts",
+          "lines": "96-131",
+          "symbol": "handleCreate/handleClaim"
+        },
+        {
+          "file": "worker/wrangler.jsonc",
+          "lines": "15",
+          "symbol": "observability.enabled=false"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "148-252",
+          "symbol": "create/claim"
+        }
+      ],
+      "description": "The Worker returns 403 on corporate signals but logs nothing (observability disabled, no console.log). The org has no Sharebuff-side tripwire that an insider attempted exfiltration. Burn events (10th failed claim) and claim-failure spikes are also invisible.",
+      "evidence": "worker/wrangler.jsonc:15 \"observability\": { \"enabled\": false }; no logging calls in worker/src/index.ts or secret.ts; Go server uses log.Printf only at startup.",
+      "recommended_fix": "Emit a structured log (locator, source IP, ASN, reasons, timestamp) on every 403 create and on every burn. Add an optional alert sink (var SHARE_ALERT_WEBHOOK) invoked on 403 and on burn. Enable Cloudflare logdrain/observability for the Worker.",
+      "acceptance": [
+        "Every 403 create produces a structured log entry with reasons + source",
+        "A burn (10th failed claim) emits an alert/log",
+        "Configured webhook fires on 403 and on burn"
+      ],
+      "verification": "Unit test asserting a log/alert callback is invoked on 403 and on burn; e2e: trigger a 403 (send a proxy header) and assert the log line/webhook call.",
+      "resolution": "Worker: observability on; structured create_refused / secret_burned / rate_limited / volume_limited events to Workers Logs and optional ALERT_WEBHOOK secret. Go: log lines + -alert-webhook. Events carry reasons, ASN org, country, locator, bucket — deliberately not source IP or payloads. Tests: TestAlertWebhook.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-003",
+      "title": "Web UI caps PIN at 4 words (50 bits); no character-PIN option; default is 3 words (37.7 bits)",
+      "severity": "high",
+      "category": "offline-decrypt",
+      "threat_refs": [
+        "T2"
+      ],
+      "status": "fixed",
+      "fix_type": "code",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "web/index.html",
+          "lines": "52-55",
+          "symbol": "PIN radios (3/4 words)"
+        },
+        {
+          "file": "web/app.js",
+          "lines": "132-135",
+          "symbol": "createSecret call / newWordPin"
+        },
+        {
+          "file": "web/crypto.js",
+          "lines": "125-135",
+          "symbol": "newWordPin"
+        }
+      ],
+      "description": "The browser Share tab only offers 3 or 4 WORD PINs. The higher-entropy random-character PIN (CLI --pin-len, 5 bits/char) exists only in the CLI. Against an attacker with ciphertext+link: 3-word PIN ~10 h on a 1000-GPU farm; 4 words ~9.5 y; a 12-char char-PIN (~60 bits) ~ millennia. The most common (browser) path is therefore the weakest.",
+      "evidence": "web/index.html:53-54 only value=3 and value=4 word radios; web/app.js:132 always calls newWordPin(WORDS, n); no char-PIN path in the UI.",
+      "recommended_fix": "Default the PIN radio to 4 words. Add a 'Random code (stronger)' option that generates a 12-16 char random PIN via a new newCharPin(len) (reuse randomToken) and passes it to createSecret. Display the bit strength next to each option.",
+      "acceptance": [
+        "Default PIN is 4 words",
+        "A character-PIN option exists in the Share tab and produces a valid claim",
+        "Bit strength is displayed for each PIN option"
+      ],
+      "verification": "Add a char-PIN vector to tests/parity.mjs; e2e: create a secret with the char PIN and retrieve it successfully.",
+      "resolution": "Default 4 words (50.3 bits) in CLI and web; Share tab offers 3/4/6 words and a 16-char random PIN (80 bits) with bit strengths shown; crypto.js newCharPin. E2E covers a 6-word PIN retrieval; parity covers word PINs.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-004",
+      "title": "Default tier is 40-bit --tiny; weak if the attacker has PIN + ciphertext",
+      "severity": "high",
+      "category": "offline-decrypt",
+      "threat_refs": [
+        "T3"
+      ],
+      "status": "fixed",
+      "fix_type": "code+doc",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "cmd/sharebuff/main.go",
+          "lines": "257-284",
+          "symbol": "chooseTier (default tiny)"
+        },
+        {
+          "file": "web/index.html",
+          "lines": "46-50",
+          "symbol": "tier radios (tiny checked)"
+        },
+        {
+          "file": "internal/wire/wire.go",
+          "lines": "30",
+          "symbol": "KeyLenTiny=5"
+        }
+      ],
+      "description": "--tiny (40-bit K) is the default. If the attacker has the PIN + ciphertext (but not the link), the 40-bit key is GPU-crackable in ~2 days on a 1000-GPU farm. The key size only protects the 'dump only' case (77.7 bits joint); it adds nothing when the link (K) is known.",
+      "evidence": "cmd/sharebuff/main.go:178 chooseTier defaults to KeyLenTiny; web/index.html:47 tiny radio is checked.",
+      "recommended_fix": "Default to --short (128-bit) when the payload is a file or > 16 KiB; keep --tiny only for small text. In the web UI, auto-select the Short tier when a file is chosen. Document that --tiny is for low-value, type-by-hand shares.",
+      "acceptance": [
+        "A file share defaults to a 31-char (short) code",
+        "A small text share may still use tiny",
+        "Docs state the tier guidance"
+      ],
+      "verification": "e2e: a file share yields a 31-char code; unit test that the default tier depends on payload type/size.",
+      "resolution": "Automatic tier: files and text > 4 KiB (stricter than the suggested 16 KiB) get the 128-bit key in CLI (chooseTier) and web (autoKeyBytes); explicit flag/env/UI overrides; both say which tier was used. Tests: TestChooseTierAutoEscalation; E2E asserts a file gets a 31-char code.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-014",
+      "title": "No upload volume/count caps -> bulk exfil dead-drop even from allow-listed egress",
+      "severity": "high",
+      "category": "exfil",
+      "threat_refs": [
+        "T1"
+      ],
+      "status": "fixed",
+      "fix_type": "code+config",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "worker/src/index.ts",
+          "lines": "96-118",
+          "symbol": "handleCreate"
+        },
+        {
+          "file": "worker/src/secret.ts",
+          "lines": "58-71",
+          "symbol": "Secret.create"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "148-200",
+          "symbol": "(*store).create"
+        }
+      ],
+      "description": "Even from an allow-listed corporate egress (SB-001), one identity could create many 20 MiB secrets (7-day TTL) as an exfil dead-drop. There is no per-IP/per-ASN create count or byte-volume cap.",
+      "evidence": "No counter or quota in handleCreate/Secret.create; only per-request size caps (MAX_BODY/MAX_BLOB).",
+      "recommended_fix": "In corporate mode, cap creates per source (e.g., N per hour and M MiB per hour) using a KV/DO counter keyed by source IP/ASN; return 429 and emit an alert (SB-002) when exceeded. Make the caps configurable vars.",
+      "acceptance": [
+        "A source exceeding the create count or volume cap gets 429 in corporate mode",
+        "The caps are configurable",
+        "Exceeding a cap emits an alert"
+      ],
+      "verification": "e2e: loop creates from one source until the cap, assert 429 + alert callback.",
+      "resolution": "Per-IP hourly caps in every mode: 60 creates and 256 MiB (vars CREATE_PER_HOUR / CREATE_MIB_PER_HOUR; Go flags -create-per-hour / -mib-per-hour), 429 + volume_limited alert. Tests: TestVolumeCaps.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-005",
+      "title": "No edge rate limiting -> burn DoS + Durable Object cost amplification",
+      "severity": "medium",
+      "category": "dos",
+      "threat_refs": [
+        "T8",
+        "T9"
+      ],
+      "status": "fixed",
+      "fix_type": "config",
+      "auto_fixable": false,
+      "locations": [
+        {
+          "file": "worker/src/index.ts",
+          "lines": "120-131",
+          "symbol": "handleClaim"
+        },
+        {
+          "file": "worker/wrangler.jsonc",
+          "lines": "1-16",
+          "symbol": "(no rate-limiting config)"
+        }
+      ],
+      "description": "There is no per-IP or per-locator rate limit. An attacker can burn a known locator (10 garbage claims ~14 min) or scan the 25-bit locator space, and can instantiate empty Durable Objects by claiming random locators (operator cost / free-plan quota).",
+      "evidence": "No rate-limiting in worker/src/index.ts; wrangler.jsonc has no rate-limiting block (Cloudflare rate limiting is configured via dashboard/API, not wrangler.jsonc).",
+      "recommended_fix": "Add Cloudflare Rate Limiting rules on POST /api/secrets and POST /api/secrets/*/claim: a per-IP request budget and a per-locator budget. Optionally add a cheap KV 'seen-locator' gate before idFromName to avoid instantiating DOs for obviously-spam locators.",
+      "acceptance": [
+        "A single IP exceeding the claim budget gets an edge 429",
+        "Per-locator claim rate is capped"
+      ],
+      "verification": "Confirm the Cloudflare rate-limit rule exists; load test exceeding the budget returns 429.",
+      "resolution": "Cloudflare Rate Limiting binding (measured permissive: 150 claims/45 s → 9 refusals) kept as outer layer; exact per-IP IPLimiter Durable Object enforces 10 creates / 30 claims per minute before any Secret object is touched (also closes DO amplification). Per-locator pacing = existing cooldown/burn. Go server: per-IP windows. Production verified.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-006",
+      "title": "Origin compromise serves malicious page JS (exfiltrates typed code+PIN / C2 landing)",
+      "severity": "medium",
+      "category": "origin",
+      "threat_refs": [
+        "T5"
+      ],
+      "status": "partial",
+      "fix_type": "config+org",
+      "auto_fixable": false,
+      "locations": [
+        {
+          "file": "web/app.js",
+          "lines": "1-286",
+          "symbol": "(first-party page JS)"
+        },
+        {
+          "file": "web/crypto.js",
+          "lines": "1-197",
+          "symbol": "(first-party page JS)"
+        },
+        {
+          "file": "Makefile",
+          "lines": "77-78",
+          "symbol": "deploy target"
+        }
+      ],
+      "description": "CSP blocks third-party scripts but not first-party. A compromised Cloudflare account or deploy pipeline serves altered app.js that captures the typed code+PIN on the next retrieval, or turns the page into a C2 beacon.",
+      "evidence": "CSP in web/_headers and cmd/sharebuff-server/main.go:262 is script-src 'self' (first-party trusted); no integrity mechanism for first-party JS.",
+      "recommended_fix": "Enforce 2FA + branch protection + signed commits on the deploy path. Publish a SHA-256 of app.js+crypto.js (repo file or PGP-signed) that IT can verify against the served page, and show a short integrity hash footer on the page. Promote the self-hosted sharebuff-server for high-trust use.",
+      "acceptance": [
+        "A published, signed hash of the page JS exists",
+        "The page displays a verifiable integrity hash",
+        "Deploy requires signed commits + 2FA"
+      ],
+      "verification": "Compute sha256 of the served app.js/crypto.js and compare to the published value; confirm the footer hash matches.",
+      "resolution": "make integrity writes web/integrity.json (test fails if stale); page footer shows the app.js hash prefix; README has the curl+shasum recipe. Commits are GPG-signed. Remaining (operator, dashboard): 2FA on the Cloudflare account and GitHub branch protection.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-011",
+      "title": "THREAT-MODEL.md missing 'breach + PIN-leak' row; 'tiny costs nothing' is overclaimed",
+      "severity": "medium",
+      "category": "doc",
+      "threat_refs": [
+        "T3"
+      ],
+      "status": "fixed",
+      "fix_type": "doc",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "docs/THREAT-MODEL.md",
+          "lines": "7-18",
+          "symbol": "scenario table"
+        },
+        {
+          "file": "docs/THREAT-MODEL.md",
+          "lines": "22",
+          "symbol": "verdict"
+        }
+      ],
+      "description": "The model has no row for an attacker with ciphertext + PIN (no link), where --tiny is only 40 bits (GPU-crackable in ~2 days on a 1000-GPU farm). The verdict 'tiny costs nothing' is only true for breach+link, not breach+PIN.",
+      "evidence": "docs/THREAT-MODEL.md rows 1-10 cover breach (no link) as 77.7-bit joint and breach+link as PIN-only; no breach+PIN row. Line 22 states 'tiny costs nothing there' without scoping.",
+      "recommended_fix": "Add a row: 'Server breach + leaked PIN (no link) -> K only: 40 bits (tiny) / 128 (short) / 256 (full); 1000-GPU farm ~2 d (tiny), infeasible (short/full)'. Scope the verdict's 'tiny costs nothing' to the breach+link case only.",
+      "acceptance": [
+        "The table includes the breach+PIN-leak row with per-tier bit counts",
+        "The verdict is scoped to breach+link"
+      ],
+      "verification": "Review the updated table and verdict text.",
+      "resolution": "THREAT-MODEL.md row 4b (breach + leaked PIN) with per-tier numbers; verdict re-scoped.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-015",
+      "title": "Confirm the protocol cannot be used as a C2 channel (and keep it that way)",
+      "severity": "medium",
+      "category": "c2",
+      "threat_refs": [
+        "T5"
+      ],
+      "status": "fixed",
+      "fix_type": "analysis+config",
+      "auto_fixable": false,
+      "locations": [
+        {
+          "file": "worker/src/index.ts",
+          "lines": "133-150",
+          "symbol": "default fetch routing"
+        },
+        {
+          "file": "worker/src/secret.ts",
+          "lines": "73-113",
+          "symbol": "Secret.claim (one-shot)"
+        },
+        {
+          "file": "web/app.js",
+          "lines": "212-233",
+          "symbol": "fragment handling"
+        }
+      ],
+      "description": "Verified: claim is one-shot (tombstoned before the ciphertext is returned), there is no server->client push (no websocket/SSE/long-poll/subscribe), the code rides in the URL fragment so the server cannot track link opens, and the Worker is not an open proxy (only /api/* + static assets). It is therefore a poor C2. Residual C2/exfil risk is origin-compromise landing (SB-006) and repeated-create bulk exfil (SB-014).",
+      "evidence": "grep of worker/src and web/app.js finds no websocket/EventSource/SSE/subscribe; secret.ts claim does deleteAll() before returning ct; index.ts only routes /api/* and env.ASSETS.fetch.",
+      "recommended_fix": "Document this assessment in SECURITY.md. Add a regression test asserting claim stays one-shot and that no subscribe/poll/push endpoint is introduced. Keep the create-count cap (SB-014) and rate limiting (SB-005).",
+      "acceptance": [
+        "SECURITY.md contains the C2 assessment and its residual risks",
+        "A test asserts claim is one-shot and that no subscribe/poll/push endpoint exists"
+      ],
+      "verification": "Run the one-shot claim test; grep the codebase for websocket|EventSource|text/event-stream|subscribe and confirm none.",
+      "resolution": "SECURITY.md \"Not a command-and-control channel\" section; TestNoPushChannels greps worker/web/server sources for websocket/EventSource/SSE/subscribe/long-poll; one-shot claim covered by TestClaimLifecycle/TestConcurrentClaims.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-007",
+      "title": "Broken 'PINs are random' test",
+      "severity": "low",
+      "category": "test",
+      "threat_refs": [],
+      "status": "fixed",
+      "fix_type": "code",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "cmd/sharebuff/words_test.go",
+          "lines": "41",
+          "symbol": "TestNewWordPIN"
+        }
+      ],
+      "description": "if newWordPIN(3) == pin && newWordPIN(3) == pin compares two fresh PINs to the FIRST pin, not to each other; it can essentially never fail, so PIN randomness is unverified (flagged by staticcheck SA4000).",
+      "evidence": "cmd/sharebuff/words_test.go:41.",
+      "recommended_fix": "Compare two independent fresh PINs: if newWordPIN(3) == newWordPIN(3) { t.Fatal(...) }, or a statistical collision test over N samples.",
+      "acceptance": [
+        "The test compares two independent fresh PINs",
+        "It fails if the RNG is constant"
+      ],
+      "verification": "go test ./cmd/sharebuff -run TestNewWordPIN; temporarily force a constant PIN and confirm the test fails.",
+      "resolution": "TestNewWordPIN now requires ≥20 distinct PINs in 21 draws.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-008",
+      "title": "CLI prints a 40-char plaintext preview to the terminal",
+      "severity": "low",
+      "category": "endpoint",
+      "threat_refs": [
+        "T7"
+      ],
+      "status": "fixed",
+      "fix_type": "code",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "cmd/sharebuff/main.go",
+          "lines": "301-318",
+          "symbol": "preview()"
+        },
+        {
+          "file": "cmd/sharebuff/main.go",
+          "lines": "244-248",
+          "symbol": "print block"
+        }
+      ],
+      "description": "The CLI prints the first 40 runes of the payload to stderr (scrollback leak; threat model #8).",
+      "evidence": "cmd/sharebuff/main.go:244 what := ... preview(plain); printed at line 248.",
+      "recommended_fix": "Add --no-preview (suppress the preview) and/or print a SHA-256 prefix instead of the plaintext. Keep the preview by default for small text only.",
+      "acceptance": [
+        "--no-preview prints no plaintext",
+        "Default behavior is unchanged for small text"
+      ],
+      "verification": "printf 'secret' | ./sharebuff --no-preview --server ... produces no plaintext in output.",
+      "resolution": "--no-preview added; default preview stays (40 chars).",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-009",
+      "title": "After a claim, PIN/code/plaintext remain in the DOM and URL fragment",
+      "severity": "low",
+      "category": "endpoint",
+      "threat_refs": [
+        "T6"
+      ],
+      "status": "fixed",
+      "fix_type": "code",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "web/app.js",
+          "lines": "172-208",
+          "symbol": "finishText/finishFile"
+        },
+        {
+          "file": "web/app.js",
+          "lines": "212-233",
+          "symbol": "fragment handling"
+        }
+      ],
+      "description": "On a successful claim the PIN stays in #pin, the code stays in the URL fragment (-> browser history), and the plaintext is not zeroized.",
+      "evidence": "web/app.js finishText/finishFile never clear #pin or the fragment; the fragment set at load (line 212) persists.",
+      "recommended_fix": "After a successful claim, call history.replaceState(null,'',location.pathname) to drop the fragment, clear #pin, and overwrite the in-page plaintext buffer where feasible.",
+      "acceptance": [
+        "After a successful claim the URL fragment is empty",
+        "#pin is cleared after a successful claim"
+      ],
+      "verification": "Manual/e2e: after a successful claim, location.hash === '' and #pin.value === ''.",
+      "resolution": "history.replaceState drops the fragment, #pin is cleared, plaintext buffers zeroed, object URLs revoked on pagehide.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-010",
+      "title": "Fallback server parity gap undocumented (in-memory, no ASN signal)",
+      "severity": "low",
+      "category": "doc",
+      "threat_refs": [
+        "T1"
+      ],
+      "status": "fixed",
+      "fix_type": "doc",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "41-48",
+          "symbol": "store (in-memory map)"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "85-108",
+          "symbol": "signals (no ASN)"
+        }
+      ],
+      "description": "The self-hosted server is in-memory (secrets lost on restart) and has no ASN signal (headers/HTTP-version only), so its corporate detection is weaker than the Worker's. This parity gap is not documented.",
+      "evidence": "store.m is a map with no persistence; signals() checks headers/proto/policy but no ASN.",
+      "recommended_fix": "Document the gap in README/SECURITY.md (in-memory, no ASN detection). Optionally add a -persist <dir> flag and note the ASN limitation explicitly.",
+      "acceptance": [
+        "README/SECURITY.md states the fallback server is in-memory and lacks ASN detection"
+      ],
+      "verification": "grep README.md and docs/SECURITY.md for the parity note.",
+      "resolution": "README and SECURITY.md state the fallback server is in-memory and lacks the ASN signal.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-012",
+      "title": "Docs overstate client-side scrypt as a server-enforced control",
+      "severity": "low",
+      "category": "doc",
+      "threat_refs": [
+        "T2"
+      ],
+      "status": "fixed",
+      "fix_type": "doc",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "docs/SECURITY.md",
+          "lines": "101-116",
+          "symbol": "Threat 1"
+        }
+      ],
+      "description": "The claim flow runs scrypt client-side ('doubles as proof-of-work'), but the server does not verify any PoW - it only does SHA-256 + constant-time compare. An online attacker skips scrypt and sends raw auth guesses; only the per-record cooldown + 10-attempt cap paces them.",
+      "evidence": "worker/src/secret.ts:90 and cmd/sharebuff-server/main.go:236 compute SHA-256(auth) and compare; no PoW check. SECURITY.md Threat 1 implies the scrypt is the online protection.",
+      "recommended_fix": "Reword Threat 1: the scrypt is client-side UX/anti-automation; the actual online protection is the server-enforced 10-counted-attempt cap + per-record cooldown.",
+      "acceptance": [
+        "SECURITY.md no longer implies server-side PoW verification"
+      ],
+      "verification": "Review the reworded Threat 1 section.",
+      "resolution": "SECURITY.md Threat 1 reworded: scrypt is client-side; server pacing is cooldown/burn + per-IP limits.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-017",
+      "title": "Covert out-of-band signaling via locator liveness (404/403/410)",
+      "severity": "low",
+      "category": "c2",
+      "threat_refs": [
+        "T8"
+      ],
+      "status": "fixed",
+      "fix_type": "config",
+      "auto_fixable": false,
+      "locations": [
+        {
+          "file": "worker/src/secret.ts",
+          "lines": "73-113",
+          "symbol": "Secret.claim (status codes)"
+        },
+        {
+          "file": "worker/src/index.ts",
+          "lines": "120-131",
+          "symbol": "handleClaim"
+        }
+      ],
+      "description": "An attacker could encode bits in whether a locator is live (403 on wrong PIN), claimed (410), or absent (404) - a very slow, noisy covert channel (DNS-tunneling-like but slower).",
+      "evidence": "claim returns distinct 404/403/410/429/200 states that differ by locator state.",
+      "recommended_fix": "Edge rate limiting (SB-005) plus create/claim volume monitoring (SB-002/SB-014) makes sustained probing impractical and detectable. Document the residual.",
+      "acceptance": [
+        "Rate limiting bounds the probe rate",
+        "Volume monitoring would flag sustained locator probing"
+      ],
+      "verification": "Load test probing random locators is rate-limited and triggers the volume alert.",
+      "resolution": "Documented as residual in the C2 section; bounded by per-IP limits and visible as sustained probing in alerts.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-013",
+      "title": "Missing Permissions-Policy header; PIN field is type=text",
+      "severity": "info",
+      "category": "hardening",
+      "threat_refs": [
+        "T6"
+      ],
+      "status": "fixed",
+      "fix_type": "code",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "web/index.html",
+          "lines": "93-95",
+          "symbol": "PIN input"
+        },
+        {
+          "file": "web/_headers",
+          "lines": "1-6",
+          "symbol": "static headers"
+        },
+        {
+          "file": "cmd/sharebuff-server/main.go",
+          "lines": "254-269",
+          "symbol": "staticHandler headers"
+        }
+      ],
+      "description": "No Permissions-Policy header is sent; the PIN input is type=text (visible to shoulder-surfing).",
+      "evidence": "web/_headers and staticHandler set CSP/Referrer/HSTS/nosniff but no Permissions-Policy; index.html:93 type=\"text\".",
+      "recommended_fix": "Add Permissions-Policy: camera=(), microphone=(), geolocation=() to both servers and _headers. Optionally make the PIN type=password with a reveal toggle.",
+      "acceptance": [
+        "Permissions-Policy header present on / and API responses",
+        "PIN field hides input by default (optional)"
+      ],
+      "verification": "curl -I / | grep -i permissions-policy returns the header.",
+      "resolution": "Permissions-Policy on both servers and _headers; PIN field is type=password with a Show toggle.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    },
+    {
+      "id": "SB-016",
+      "title": "No link-open/delivery tracking is a feature - preserve it",
+      "severity": "info",
+      "category": "c2",
+      "threat_refs": [
+        "T5"
+      ],
+      "status": "fixed",
+      "fix_type": "doc",
+      "auto_fixable": true,
+      "locations": [
+        {
+          "file": "web/app.js",
+          "lines": "212-233",
+          "symbol": "fragment handling"
+        },
+        {
+          "file": "docs/SECURITY.md",
+          "lines": "166-175",
+          "symbol": "Threat 4"
+        }
+      ],
+      "description": "Because the code rides in the URL fragment (never transmitted), the server cannot track who opened a link. This is anti-stalker/anti-C2 and should be preserved.",
+      "evidence": "web/app.js reads location.hash client-side; the fragment is never sent to any endpoint.",
+      "recommended_fix": "Document explicitly that no open-tracking will be added, and guard against future 'delivery confirmation' features that would require transmitting the fragment.",
+      "acceptance": [
+        "SECURITY.md states no open-tracking by design"
+      ],
+      "verification": "Review the added note in Threat 4.",
+      "resolution": "SECURITY.md commits to no open-tracking by design.",
+      "resolved_in": "v4.1 (2026-08-27)"
+    }
+  ]
+}

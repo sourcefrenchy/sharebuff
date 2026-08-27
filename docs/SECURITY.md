@@ -89,6 +89,11 @@ Retrieve and one line explaining why. The signals:
    retrieve-only` at their proxy (deterministic, no heuristics), run the
    self-hosted server with `-share=false`, or simply DNS-block the host.
 
+**Decision (SB-001):** a fail-closed allow-list mode was considered and
+declined for this instance — it is a network control either way, and the
+hotspot/personal-device bypass is the organization's MDM/DLP problem; the
+blocklist plus alerting is what ships.
+
 **Limits, stated plainly:** this is a *network* control. A corporate laptop
 on a phone hotspot, or a corporate network without a recognizable gateway,
 looks like home Wi-Fi — device-level enforcement is the organization's MDM/DLP
@@ -183,6 +188,26 @@ no tier can help — that is the recipient's endpoint, not the protocol.
   (X25519 + ML-KEM) with modern browsers, so even the transport layer resists
   recording attacks — and what it carries is already AES-256 ciphertext.
 
+## Not a command-and-control channel (SB-015)
+
+Sharebuff is a poor C2 channel by construction, and this property is guarded
+by a test (`TestNoPushChannels`): claims are one-shot (the record is
+tombstoned *before* the ciphertext is returned, so there is no state to poll);
+there is no server→client push of any kind (no WebSocket, SSE, long-poll or
+subscribe endpoint); the code rides in the URL fragment, so the server cannot
+tell who opened a link; and the Worker is not an open proxy (it routes
+`/api/*` and static assets only). Using it as a dead-drop at scale is bounded
+by the per-IP caps (10 creates/min, 60 creates and 256 MiB per hour, alerted
+as `volume_limited`). Residual risks: an origin compromise turning the page
+into a beacon (Threat 6 in the model), and a very slow covert channel via
+locator liveness (404/403/410 differ) — bounded by the same rate limits and
+visible in the alert stream as sustained probing.
+
+**No open-tracking, by design (SB-016).** Because the fragment is never
+transmitted, the server cannot record who opened a link or when. This is
+anti-stalking and anti-C2, and it is a commitment: no "delivery confirmation"
+feature will be added that requires transmitting the fragment.
+
 ## Threat 4 — the link itself
 
 - **Preview bots / scanners**: the code rides in the URL fragment, which is
@@ -218,7 +243,8 @@ Workers Logs, and POSTs the same events to `ALERT_WEBHOOK` when that secret
 is set. Payloads, proofs and client IPs are never included. The self-hosted
 server logs the same events and accepts `-alert-webhook`; it lacks the ASN
 signal (headers and HTTP-version tells only), so its corporate detection is
-weaker than the Worker's.
+weaker than the Worker's, and it is **in-memory** — secrets do not survive a
+restart (availability only; nothing readable is ever on disk).
 
 ## Out of scope
 

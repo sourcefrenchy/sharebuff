@@ -382,3 +382,12 @@ if (fromLink) {
 }
 ready = true;
 $('claim-btn').disabled = false;
+
+// Integrity footer: the build-time SHA-256 of app.js (first 12 hex chars).
+// A compromised origin could fake this line, so it is a convenience for
+// eyeballing against the published value — the real check is
+// `curl …/app.js | shasum -a 256` (README, "Verify the page you were served").
+fetch('/integrity.json', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+  const h = j?.sha256?.['app.js'];
+  if (h) $('build').textContent = `Page build ${h.slice(0, 12)} — verify: sha256 of /app.js should start with it.`;
+}).catch(() => {});
