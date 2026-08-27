@@ -116,3 +116,37 @@ export class Secret extends DurableObject {
     await this.ctx.storage.deleteAll();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Exact per-IP rate limiting. One object per client IP (idFromName(ip)) keeps
+// fixed windows in memory — no storage writes, and an evicted object simply
+// starts a fresh window. Cloudflare's Rate Limiting binding is eventually
+// consistent (per-machine caches), so it stays as a coarse outer layer while
+// this object is the authoritative count. Checked before any Secret object is
+// touched, so random-locator spam costs one object per attacker IP, not one
+// per guessed locator.
+export class IPLimiter extends DurableObject {
+  private windows = new Map<string, { start: number; count: number }>();
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const bucket = url.searchParams.get('bucket') ?? 'default';
+    const max = Number(url.searchParams.get('max') ?? '60');
+    const period = Number(url.searchParams.get('period') ?? '60') * 1000;
+    const now = Date.now();
+    // Opportunistic cleanup keeps the map bounded.
+    if (this.windows.size > 64) {
+      for (const [k, w] of this.windows) if (now - w.start >= period) this.windows.delete(k);
+    }
+    const w = this.windows.get(bucket);
+    if (!w || now - w.start >= period) {
+      this.windows.set(bucket, { start: now, count: 1 });
+      return json(200, { allowed: true });
+    }
+    if (w.count >= max) {
+      return json(200, { allowed: false, retry_after_seconds: Math.ceil((w.start + period - now) / 1000) });
+    }
+    w.count++;
+    return json(200, { allowed: true });
+  }
+}

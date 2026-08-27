@@ -112,9 +112,14 @@ online controls are the server's, per secret and per IP:
 - The record is **tombstoned before the ciphertext is returned**; concurrent
   valid claims yield exactly one winner (Durable Objects serialize per id).
 
-Per IP, the edge also caps creates at 10/min and claims at 30/min (429,
-checked before any Durable Object is touched), which bounds locator-scanning
-and burn-by-volume. With 50.3 bits of PIN (or 90+ bits of key+PIN for someone
+Per IP, creates are capped at 10/min and claims at 30/min (429 with
+`Retry-After`). Two layers: Cloudflare's Rate Limiting binding as a cheap,
+eventually-consistent outer layer (it is documented as permissive — measured:
+150 claims in 45 s produced only 9 refusals), and an **exact** per-IP Durable
+Object (`IPLimiter`, one object per client IP, in-memory windows) as the
+authoritative count, consulted before any per-secret object is touched. That
+bounds locator scanning and burn-by-volume, and means random-locator spam
+instantiates one object per attacker IP rather than one per guessed locator. With 50.3 bits of PIN (or 90+ bits of key+PIN for someone
 who only has the locator), 10 guesses succeed with probability about
 1 in 140 trillion. Online attacks are not the limiting factor in any tier.
 

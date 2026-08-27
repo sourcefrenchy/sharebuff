@@ -76,9 +76,10 @@ whichever comes first.
   rejects further claims with `429` *before the proof is examined*, and those
   are **not counted**: hammering the endpoint can neither brute-force the PIN
   nor burn the secret by volume.
-- **Rate-limited at the edge**: 10 creates and 30 claims per IP per minute
-  (Workers Rate Limiting binding; the Go server has the same limits), checked
-  before any Durable Object is touched. Refusals, burns and rate-limit hits are
+- **Rate-limited per IP**: 10 creates and 30 claims per minute — an exact
+  per-IP Durable Object behind Cloudflare's (permissive, eventually-consistent)
+  Rate Limiting binding, checked before any per-secret object is touched; the
+  Go server has the same limits. Refusals, burns and rate-limit hits are
   logged as structured events (Workers Logs) and optionally POSTed to an
   `ALERT_WEBHOOK` — never payloads or IPs.
 - **Bot/scanner-proof by construction**: everything secret-specific lives in

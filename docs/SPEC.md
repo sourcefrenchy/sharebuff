@@ -125,8 +125,9 @@ Request: `{"id": "<locator>", "ct": "<base64>", "verifier": "<hex>", "ttl_second
 - `403` → `{"error": "sharing is disabled on this network", "reasons": [...]}` —
   corporate-network signal (see SECURITY.md); nothing is stored. Not sent when
   the server runs in advise-only mode.
-- `429` → `{"error": "too many requests", "retry_after_seconds": 60}` — per-IP
-  limit (10 creates per minute).
+- `429` → `{"error": "too many requests", "retry_after_seconds": n}` (+
+  `Retry-After`) — per-IP limit (10 creates per minute), enforced exactly by a
+  per-IP Durable Object behind Cloudflare's coarse rate-limit binding.
 - `400` malformed field / bad base64 / ttl out of range
 - `409` locator already in use (sender retries with a new one)
 - `413` ciphertext blob larger than max envelope (4 + 4096 + 20 MiB) + 28 bytes

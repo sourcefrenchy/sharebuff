@@ -2,16 +2,17 @@
 // everything else to the static assets binding (../web). See docs/SPEC.md.
 // DO calls go over fetch() bodies, not RPC — ciphertexts can reach ~27 MB
 // base64, far past the 1 MiB RPC message cap.
-import { Secret } from './secret';
-export { Secret };
+import { Secret, IPLimiter } from './secret';
+export { Secret, IPLimiter };
 
 interface RateLimiter { limit(opts: { key: string }): Promise<{ success: boolean }> }
 
 interface Env {
   ASSETS: Fetcher;
   SECRET: DurableObjectNamespace;
-  CREATE_LIMIT: RateLimiter; // per-IP creates per minute (wrangler.jsonc)
-  CLAIM_LIMIT: RateLimiter;  // per-IP claims per minute
+  CREATE_LIMIT: RateLimiter; // coarse per-IP creates per minute (eventually consistent)
+  CLAIM_LIMIT: RateLimiter;  // coarse per-IP claims per minute
+  IPLIMIT: DurableObjectNamespace; // exact per-IP limiter (one object per IP)
   // "enforce" (default): creation is refused on corporate signals; "advise": only reported via /api/env.
   SHARE_POLICY?: string;
   // Optional secret: POST JSON alert events here (ntfy, Slack, Discord…). Never payloads or IPs.
@@ -30,17 +31,36 @@ function alert(env: Env, ctx: ExecutionContext, event: string, fields: Record<st
 
 const clientIP = (request: Request) => request.headers.get('cf-connecting-ip') ?? 'unknown';
 
-async function rateLimited(limiter: RateLimiter | undefined, request: Request): Promise<boolean> {
-  if (!limiter) return false; // binding absent (e.g. local dev without support) → open
+const LIMITS = { create: { max: 10, period: 60 }, claim: { max: 30, period: 60 } } as const;
+
+// Returns 0 when allowed, else the seconds to wait. Layer 1 is Cloudflare's
+// eventually-consistent binding (cheap, catches sustained floods); layer 2 is
+// the exact per-IP Durable Object. Both fail open — but loudly.
+async function rateLimited(env: Env, request: Request, bucket: keyof typeof LIMITS): Promise<number> {
+  const ip = clientIP(request);
+  const binding = bucket === 'create' ? env.CREATE_LIMIT : env.CLAIM_LIMIT;
   try {
-    const { success } = await limiter.limit({ key: clientIP(request) });
-    return !success;
-  } catch {
-    return false;
+    if (binding && !(await binding.limit({ key: ip })).success) return LIMITS[bucket].period;
+  } catch (e) {
+    console.error(JSON.stringify({ event: 'ratelimit_error', layer: 'binding', message: String(e) }));
   }
+  try {
+    const stub = env.IPLIMIT.get(env.IPLIMIT.idFromName(ip));
+    const { max, period } = LIMITS[bucket];
+    const res = await stub.fetch(`https://do/limit?bucket=${bucket}&max=${max}&period=${period}`);
+    const body = (await res.json()) as { allowed: boolean; retry_after_seconds?: number };
+    if (!body.allowed) return body.retry_after_seconds ?? period;
+  } catch (e) {
+    console.error(JSON.stringify({ event: 'ratelimit_error', layer: 'do', message: String(e) }));
+  }
+  return 0;
 }
 
-const tooMany = () => json(429, { error: 'too many requests', retry_after_seconds: 60 }, );
+function tooMany(retry: number): Response {
+  const r = json(429, { error: 'too many requests', retry_after_seconds: retry });
+  r.headers.set('retry-after', String(retry));
+  return r;
+}
 
 const ID_RE = /^[0-9A-HJKMNP-TV-Z]{5}$/; // a v4 locator
 const HEX_RE = /^[0-9a-f]{64}$/;
@@ -89,7 +109,6 @@ const MAX_TTL = 604800;
 
 function json(code: number, body: unknown): Response {
   const headers: Record<string, string> = { 'content-type': 'application/json', 'cache-control': 'no-store' };
-  if (code === 429) headers['retry-after'] = '60';
   return new Response(JSON.stringify(body), { status: code, headers });
 }
 
@@ -132,9 +151,10 @@ async function handleCreate(request: Request, env: Env, ctx: ExecutionContext): 
       return json(403, { error: 'sharing is disabled on this network', reasons: e.reasons });
     }
   }
-  if (await rateLimited(env.CREATE_LIMIT, request)) {
+  const wait = await rateLimited(env, request, 'create');
+  if (wait) {
     alert(env, ctx, 'rate_limited', { bucket: 'create' });
-    return tooMany();
+    return tooMany(wait);
   }
   const body = await readJSON(request, MAX_BODY);
   if (!body) return err(400, 'malformed body');
@@ -158,9 +178,10 @@ async function handleClaim(request: Request, env: Env, ctx: ExecutionContext, id
   if (!ID_RE.test(id)) return err(400, 'malformed id');
   // Rate-limit before touching a Durable Object: random-locator spam must not
   // instantiate objects (cost amplification) or burn secrets by volume.
-  if (await rateLimited(env.CLAIM_LIMIT, request)) {
+  const wait = await rateLimited(env, request, 'claim');
+  if (wait) {
     alert(env, ctx, 'rate_limited', { bucket: 'claim' });
-    return tooMany();
+    return tooMany(wait);
   }
   const body = await readJSON(request, 4096);
   const auth = body?.auth;
