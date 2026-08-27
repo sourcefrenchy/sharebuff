@@ -10,7 +10,7 @@ interface Env {
   SECRET: DurableObjectNamespace;
 }
 
-const ID_RE = /^[1-9A-HJ-NP-Za-km-z]{16,32}$/;
+const ID_RE = /^[0-9A-HJKMNP-TV-Z]{5}$/; // a v4 locator
 const HEX_RE = /^[0-9a-f]{64}$/;
 const MAX_BLOB = 4 + 4096 + 20 * 1024 * 1024 + 12 + 16; // envelope + nonce + tag
 const MAX_CT_B64 = Math.ceil(MAX_BLOB / 3) * 4 + 8;

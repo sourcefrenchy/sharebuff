@@ -14,60 +14,41 @@ import (
 
 var update = flag.Bool("update", false, "regenerate testdata/vectors.json")
 
-func TestBase58Roundtrip(t *testing.T) {
-	cases := [][]byte{
-		{}, {0}, {0, 0, 1}, {0xff}, bytes.Repeat([]byte{0xab}, 32),
-		{0, 0, 0, 0}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-	}
-	for _, c := range cases {
-		got, err := Base58Decode(Base58Encode(c))
-		if err != nil {
-			t.Fatalf("decode(%x): %v", c, err)
-		}
-		if !bytes.Equal(got, c) {
-			t.Fatalf("roundtrip %x -> %x", c, got)
-		}
-	}
-	if _, err := Base58Decode("0OIl"); err == nil {
-		t.Fatal("expected error on invalid base58 chars")
-	}
-}
-
-func TestBase58KnownVector(t *testing.T) {
-	// "Hello World!" is a widely used base58 reference vector.
-	if got := Base58Encode([]byte("Hello World!")); got != "2NEpo7TZRRrLZSi2U" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 func TestNormalizeCode(t *testing.T) {
 	if got := NormalizeCode("o1i-l 2ab"); got != "01112AB" {
 		t.Fatalf("got %q", got)
 	}
 }
 
-func TestNewPIN(t *testing.T) {
-	pin := NewPIN(6)
-	if len(pin) != 6 {
-		t.Fatalf("len %d", len(pin))
+func TestTokens(t *testing.T) {
+	for _, tok := range []string{NewPIN(6), NewLocator()} {
+		for _, r := range tok {
+			if !strings.ContainsRune(Alphabet, r) {
+				t.Fatalf("char %q outside alphabet in %q", r, tok)
+			}
+		}
 	}
-	for _, r := range pin {
-		if !strings.ContainsRune(PINAlphabet, r) {
-			t.Fatalf("char %q outside alphabet", r)
+	if len(NewLocator()) != LocatorLen || !ValidLocator(NewLocator()) {
+		t.Fatal("bad locator")
+	}
+	for _, bad := range []string{"", "ABCD", "ABCDEF", "ABCDU", "abcde"} {
+		if ValidLocator(bad) {
+			t.Fatalf("locator %q accepted", bad)
 		}
 	}
 }
 
 func TestCodeRoundtrip(t *testing.T) {
-	for _, short := range []bool{true, false} {
-		key := NewKey(short)
-		code := EncodeCode(key)
-		wantLen := 26 + 5 // 26 chars in 6 groups → 5 dashes
-		if !short {
-			wantLen = 52 + 10
+	for _, n := range []int{KeyLenTiny, KeyLenShort, KeyLenFull} {
+		key := NewKey(n)
+		loc := NewLocator()
+		code := EncodeCode(loc, key)
+		wantChars := LocatorLen + map[int]int{KeyLenTiny: 8, KeyLenShort: 26, KeyLenFull: 52}[n]
+		if got := len(NormalizeCode(code)); got != wantChars {
+			t.Fatalf("keylen %d: code %q has %d chars, want %d", n, code, got, wantChars)
 		}
-		if len(code) != wantLen {
-			t.Fatalf("short=%v code %q has length %d, want %d", short, code, len(code), wantLen)
+		if !strings.HasPrefix(code, loc+"-") {
+			t.Fatalf("code %q does not start with locator %q", code, loc)
 		}
 		for _, group := range strings.Split(code, "-") {
 			if len(group) > 5 || len(group) == 0 {
@@ -77,79 +58,81 @@ func TestCodeRoundtrip(t *testing.T) {
 		// Canonical, lowercase, dash-less, and "typo-tolerant" spellings all decode.
 		typed := strings.NewReplacer("0", "o", "1", "l").Replace(strings.ToLower(code))
 		for _, spelling := range []string{code, strings.ToLower(code), strings.ReplaceAll(code, "-", ""), typed, " " + code + " "} {
-			got, err := DecodeCode(spelling)
+			gotLoc, gotKey, err := DecodeCode(spelling)
 			if err != nil {
 				t.Fatalf("decode %q: %v", spelling, err)
 			}
-			if !bytes.Equal(got, key) {
-				t.Fatalf("decode %q gave wrong key", spelling)
+			if gotLoc != loc || !bytes.Equal(gotKey, key) {
+				t.Fatalf("decode %q gave wrong locator/key", spelling)
 			}
 		}
 	}
 }
 
 func TestCodeRejects(t *testing.T) {
-	key := NewKey(true)
-	code := EncodeCode(key)
+	code := EncodeCode(NewLocator(), NewKey(KeyLenTiny))
 	bad := []string{
-		"",
-		code[:len(code)-1],                 // too short
+		"", "ABCDE",
+		code[:len(code)-1],                 // key part too short
 		code + "A",                         // too long
 		strings.Replace(code, "-", "U", 1), // U is not in the alphabet
 	}
-	// Non-canonical: flip the padding bits of the last character.
-	raw := NormalizeCode(code)
-	last := strings.IndexByte(PINAlphabet, raw[len(raw)-1])
-	bad = append(bad, raw[:len(raw)-1]+string(PINAlphabet[last|1]))
 	for _, b := range bad {
-		if _, err := DecodeCode(b); err == nil {
+		if _, _, err := DecodeCode(b); err == nil {
 			t.Fatalf("code %q accepted", b)
+		}
+	}
+	// Non-canonical spellings of the 26- and 52-char keys (padding bits set).
+	for _, n := range []int{KeyLenShort, KeyLenFull} {
+		raw := NormalizeCode(EncodeCode(NewLocator(), NewKey(n)))
+		last := strings.IndexByte(Alphabet, raw[len(raw)-1])
+		nc := raw[:len(raw)-1] + string(Alphabet[last|1])
+		if _, _, err := DecodeCode(nc); err == nil {
+			t.Fatalf("non-canonical %q accepted", nc)
 		}
 	}
 }
 
-func TestPrepareIsDeterministicAndKeyBound(t *testing.T) {
-	key := NewKey(false)
-	id1, salt1, err := Prepare(key)
+func TestDeriveIsLocatorBound(t *testing.T) {
+	key := NewKey(KeyLenFull)
+	e1, a1, err := Derive(key, "ABCDEF", "AAAAA")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, salt2, _ := Prepare(key)
-	if id1 != id2 || !bytes.Equal(salt1, salt2) {
-		t.Fatal("Prepare not deterministic")
+	e2, a2, _ := Derive(key, "ABCDEF", "AAAAA")
+	if !bytes.Equal(e1, e2) || !bytes.Equal(a1, a2) {
+		t.Fatal("Derive not deterministic")
 	}
-	if len(salt1) != SaltLen {
-		t.Fatalf("salt len %d", len(salt1))
+	e3, _, _ := Derive(key, "ABCDEF", "AAAAB")
+	if bytes.Equal(e1, e3) {
+		t.Fatal("locator does not salt the KDF")
 	}
-	if _, err := Base58Decode(id1); err != nil {
-		t.Fatalf("id not base58: %v", err)
+	e4, _, _ := Derive(key, "ABCDEG", "AAAAA")
+	if bytes.Equal(e1, e4) {
+		t.Fatal("PIN does not affect the KDF")
 	}
-	other, _, _ := Prepare(NewKey(false))
-	if other == id1 {
-		t.Fatal("different keys gave the same id")
-	}
-	if _, _, err := Prepare(make([]byte, 20)); err == nil {
+	if _, _, err := Derive(make([]byte, 20), "ABCDEF", "AAAAA"); err == nil {
 		t.Fatal("bad key length accepted")
+	}
+	if _, _, err := Derive(key, "ABCDEF", "aaaaa"); err == nil {
+		t.Fatal("non-normalized locator accepted")
 	}
 }
 
 func TestSealOpenRoundtrip(t *testing.T) {
-	key := NewKey(false)
+	key := NewKey(KeyLenTiny)
 	pin := NewPIN(6)
-	id, salt, err := Prepare(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encKey, authKey, err := Derive(key, pin, salt)
+	loc := NewLocator()
+	encKey, authKey, err := Derive(key, pin, loc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plain := []byte("hello clipboard éà \U0001f512")
-	blob, err := Seal(encKey, id, plain)
+	blob, err := Seal(encKey, loc, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Open(encKey, id, blob)
+	got, err := Open(encKey, loc, blob)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,15 +140,14 @@ func TestSealOpenRoundtrip(t *testing.T) {
 		t.Fatalf("roundtrip mismatch")
 	}
 	// Wrong PIN must fail to decrypt.
-	badEnc, _, _ := Derive(key, "AAAAAA", salt)
-	if _, err := Open(badEnc, id, blob); err == nil {
+	badEnc, _, _ := Derive(key, "AAAAAA", loc)
+	if _, err := Open(badEnc, loc, blob); err == nil {
 		t.Fatal("decrypt with wrong PIN succeeded")
 	}
-	// AAD binding: a different id must fail.
-	if _, err := Open(encKey, "2NEpo7TZRRrLZSi2U", blob); err == nil {
-		t.Fatal("decrypt with wrong id succeeded")
+	// AAD binding: a different locator must fail.
+	if _, err := Open(encKey, "ZZZZZ", blob); err == nil {
+		t.Fatal("decrypt with wrong locator succeeded")
 	}
-	// Verifier is the hash of authKey.
 	sum := sha256.Sum256(authKey)
 	if VerifierHex(authKey) != hex.EncodeToString(sum[:]) {
 		t.Fatal("verifier mismatch")
@@ -219,20 +201,19 @@ func TestEnvelopeBounds(t *testing.T) {
 }
 
 func TestSealRejectsOversizedEnvelope(t *testing.T) {
-	encKey, _, err := Derive(NewKey(true), "0123AB", bytes.Repeat([]byte{7}, SaltLen))
+	encKey, _, err := Derive(NewKey(KeyLenTiny), "0123AB", "AAAAA")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Seal(encKey, "2NEpo7TZRRrLZSi2U", make([]byte, MaxEnvelope+1)); err == nil {
+	if _, err := Seal(encKey, "AAAAA", make([]byte, MaxEnvelope+1)); err == nil {
 		t.Fatal("oversized envelope sealed")
 	}
 }
 
 type vector struct {
-	KeyCode   string `json:"key_code"`
+	Code      string `json:"code"`
+	Locator   string `json:"locator"`
 	PIN       string `json:"pin"`
-	IDB58     string `json:"id_b58"`
-	SaltHex   string `json:"salt_hex"`
 	Header    string `json:"header_json"`
 	Payload   string `json:"payload_b64"`
 	Envelope  string `json:"envelope_b64"`
@@ -249,24 +230,21 @@ func TestVectors(t *testing.T) {
 	fixed := []struct {
 		keyByte byte
 		keyLen  int
+		locator string
 		pin     string
 		header  Header
 		payload []byte
 	}{
-		{0x01, KeyLenFull, "0123AB", Header{T: "text"}, []byte("hello world")},
-		{0xaa, KeyLenShort, "ZZZZZZ", Header{T: "text"}, []byte("multi\nline\néàü \U0001f511 payload")},
-		{0x00, KeyLenFull, "o1i-l 2ab", Header{T: "text"}, []byte("PIN normalization case")},
-		{0x42, KeyLenShort, "F1LEPN", Header{T: "file", N: "résumé 🔐.pdf", M: "application/pdf"},
+		{0x01, KeyLenFull, "AB3DE", "0123AB", Header{T: "text"}, []byte("hello world")},
+		{0xaa, KeyLenShort, "ZZZZZ", "ZZZZZZ", Header{T: "text"}, []byte("multi\nline\néàü \U0001f511 payload")},
+		{0x00, KeyLenTiny, "00000", "o1i-l 2ab", Header{T: "text"}, []byte("PIN normalization case")},
+		{0x42, KeyLenTiny, "K7Q4T", "F1LEPN", Header{T: "file", N: "résumé 🔐.pdf", M: "application/pdf"},
 			[]byte{0x25, 0x50, 0x44, 0x46, 0x2d, 0x00, 0x01, 0xfe, 0xff, 0x80, 0x7f}},
 	}
 	var vecs []vector
 	for _, f := range fixed {
 		key := bytes.Repeat([]byte{f.keyByte}, f.keyLen)
-		id, salt, err := Prepare(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		encKey, authKey, err := Derive(key, f.pin, salt)
+		encKey, authKey, err := Derive(key, f.pin, f.locator)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,11 +252,11 @@ func TestVectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		blob, err := Seal(encKey, id, env)
+		blob, err := Seal(encKey, f.locator, env)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := Open(encKey, id, blob)
+		got, err := Open(encKey, f.locator, blob)
 		if err != nil || !bytes.Equal(got, env) {
 			t.Fatalf("self-open failed: %v", err)
 		}
@@ -288,10 +266,9 @@ func TestVectors(t *testing.T) {
 		}
 		hj, _ := json.Marshal(f.header)
 		vecs = append(vecs, vector{
-			KeyCode:   EncodeCode(key),
+			Code:      EncodeCode(f.locator, key),
+			Locator:   f.locator,
 			PIN:       f.pin,
-			IDB58:     id,
-			SaltHex:   hex.EncodeToString(salt),
 			Header:    string(hj),
 			Payload:   base64.StdEncoding.EncodeToString(f.payload),
 			Envelope:  base64.StdEncoding.EncodeToString(env),
@@ -323,9 +300,8 @@ func TestVectors(t *testing.T) {
 		t.Fatal("vector count mismatch; regenerate with -update")
 	}
 	for i := range vecs {
-		if vecs[i].IDB58 != stored[i].IDB58 || vecs[i].SaltHex != stored[i].SaltHex ||
-			vecs[i].EncKeyHex != stored[i].EncKeyHex || vecs[i].AuthHex != stored[i].AuthHex ||
-			vecs[i].Verifier != stored[i].Verifier || vecs[i].KeyCode != stored[i].KeyCode {
+		if vecs[i].Code != stored[i].Code || vecs[i].EncKeyHex != stored[i].EncKeyHex ||
+			vecs[i].AuthHex != stored[i].AuthHex || vecs[i].Verifier != stored[i].Verifier {
 			t.Fatalf("vector %d KDF/code output drifted from checked-in reference", i)
 		}
 	}

@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	idRe  = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{16,32}$`)
+	idRe  = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{5}$`) // a v4 locator
 	hexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 

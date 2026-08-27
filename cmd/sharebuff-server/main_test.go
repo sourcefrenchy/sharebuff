@@ -27,13 +27,10 @@ func makeSecret(t *testing.T) secret {
 
 func makeSecretPayload(t *testing.T, payload []byte) secret {
 	t.Helper()
-	key := wire.NewKey(false)
+	key := wire.NewKey(wire.KeyLenTiny)
 	pin := wire.NewPIN(6)
-	id, salt, err := wire.Prepare(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encKey, authKey, err := wire.Derive(key, pin, salt)
+	id := wire.NewLocator()
+	encKey, authKey, err := wire.Derive(key, pin, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +136,7 @@ func TestClaimLifecycle(t *testing.T) {
 		t.Fatalf("post-claim: code=%d body=%v", code, body)
 	}
 	// Unknown id is 404.
-	if code, _ := post(t, ts.URL+"/api/secrets/2NEpo7TZRRrLZSi2U/claim", map[string]string{"auth": sec.authHex}); code != 404 {
+	if code, _ := post(t, ts.URL+"/api/secrets/ZZZZZ/claim", map[string]string{"auth": sec.authHex}); code != 404 {
 		t.Fatalf("unknown id: code=%d", code)
 	}
 }

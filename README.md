@@ -17,15 +17,17 @@ $ sharebuff                          # shows usage (posts nothing)
 $ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows)
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
-$ sharebuff --short --clip           # 26-char code, for typing on another machine
-URL: https://sharebuff.sharebuff-worker.workers.dev/#M8Z3Q-7VK2P-…-X
+$ sharebuff --tiny --clip            # 13-char code, for typing on another machine
+URL: https://sharebuff.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
 PIN: 7KQ4TN
 ```
 
-The link carries only the key code — Crockford base32, case-insensitive, dashes
-optional — so it can be read aloud or typed by hand (`--short` gives a
-26-character code like a product key; the default 52-character code keeps the
-full 256-bit, post-quantum-grade key).
+The link carries only a **code** — Crockford base32, case-insensitive, dashes
+optional — so it can be read aloud or typed by hand: the recipient can open the
+bare site and enter the code in a box instead of the address bar. Three sizes:
+`--tiny` (13 chars, 40-bit key, hardened by the PIN — see below), `--short`
+(31 chars, 128-bit) and the default (57 chars, 256-bit, the formal
+post-quantum bar). [docs/SECURITY.md](docs/SECURITY.md) has the numbers.
 
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
@@ -41,11 +43,11 @@ whichever comes first.
 ## Security model (short version — full spec in [docs/SPEC.md](docs/SPEC.md))
 
 - **End-to-end encrypted**: AES-256-GCM keyed via memory-hard scrypt
-  (N=2^16, r=8, p=1) from a random key `K` (256-bit; 128-bit with `--short`)
-  + the PIN. The server-side id and salt are themselves derived from `K`
-  through scrypt, so nothing stored server-side is a cheap oracle for `K`.
-  Encryption and decryption only ever happen on the sender's and
-  recipient's machines.
+  (N=2^16, r=8, p=1) from a random key `K` **and** the PIN, salted by a random
+  public locator. Nothing stored server-side is a function of `K` alone, so an
+  attacker with the database must search key and PIN *jointly*: even `--tiny`
+  (40-bit key) costs 2⁷⁰ memory-hard scrypt evaluations offline. Encryption
+  and decryption only ever happen on the sender's and recipient's machines.
 - **Zero-knowledge server**: stores `{ciphertext, SHA-256(K_auth)}`. A full
   database dump yields neither plaintext (no `K`) nor a valid claim (needs the
   hash preimage).
@@ -64,7 +66,8 @@ whichever comes first.
   send to any server. Opening the link is stateless; only a deliberately
   submitted PIN changes anything.
 - **Quantum stance**: purely symmetric crypto — nothing for Shor's algorithm;
-  AES-256 from 256-bit entropy keeps ≥128-bit strength under Grover.
+  the default tier keeps ≥128-bit strength under Grover. Full analysis of
+  online, offline and quantum attacks per tier: [docs/SECURITY.md](docs/SECURITY.md).
 - Strict CSP (`default-src 'none'`), no third-party requests, no analytics;
   the only vendored JS is [@noble/hashes](https://github.com/paulmillr/noble-hashes)
   scrypt, pinned and checked in (`web/scrypt.js`).
@@ -80,6 +83,7 @@ whichever comes first.
 | `internal/wire` | shared Go crypto/encoding + reference test vectors |
 | `tests/` | JS↔Go parity test and E2E harness |
 | `docs/SPEC.md` | the protocol spec (source of truth) |
+| `docs/SECURITY.md` | threat model: brute force, offline, quantum — per tier |
 
 ## Build & test
 
@@ -116,7 +120,7 @@ it with `SHAREBUFF_URL`/`--server`.
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--short] [--clip] [--file PATH]
+sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--tiny|--short] [--clip] [--file PATH]
 ```
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped

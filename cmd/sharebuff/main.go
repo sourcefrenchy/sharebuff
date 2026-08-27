@@ -1,5 +1,5 @@
-// sharebuff posts an end-to-end-encrypted, one-shot secret from stdin or the
-// macOS clipboard and prints the retrieve URL + PIN. See docs/SPEC.md.
+// sharebuff posts an end-to-end-encrypted, one-shot secret (text or a file)
+// and prints the retrieve URL + PIN. See docs/SPEC.md and docs/SECURITY.md.
 package main
 
 import (
@@ -112,6 +112,30 @@ func readInput(filePath string, forceClip bool) (wire.Header, []byte) {
 // SHAREBUFF_URL or --server (e.g. for a self-hosted sharebuff-server).
 const defaultServer = "https://sharebuff.sharebuff-worker.workers.dev"
 
+func usage() {
+	fmt.Fprintf(flag.CommandLine.Output(), `sharebuff — one-shot end-to-end-encrypted drop (text & files)
+
+Post a secret and get back a code (in a URL) plus a one-time PIN. The first
+valid retrieve destroys it on the server (so do 10 wrong PINs, or 7 days).
+Everything is encrypted on this machine: the server never sees the data,
+the filename, the key, or the PIN.
+
+Usage:
+  <cmd> | sharebuff             post piped text     (e.g. pbpaste | sharebuff)
+  sharebuff --clip              post your clipboard (pbpaste / wl-paste / xclip / Get-Clipboard)
+  sharebuff --file report.pdf   post a file, up to 20 MiB
+  sharebuff --tiny --clip       13-char code for typing on another machine (see docs/SECURITY.md)
+
+Flags:
+`)
+	flag.PrintDefaults()
+	fmt.Fprintf(flag.CommandLine.Output(), `
+The recipient opens the URL (or opens the site and types the code) and enters
+the PIN — no CLI needed on their side. Share the code and the PIN over two
+different channels.
+`)
+}
+
 func main() {
 	envOr := os.Getenv("SHAREBUFF_URL")
 	if envOr == "" {
@@ -122,29 +146,9 @@ func main() {
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
-	short := flag.Bool("short", false, "128-bit key: a 26-char code that is easy to type by hand (default 256-bit, 52 chars)")
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), `sharebuff — one-shot end-to-end-encrypted drop (text & files)
-
-Post a secret and get back a URL plus a one-time PIN. The first valid
-retrieve destroys it on the server (so do 10 wrong PINs, or 7 days).
-Everything is encrypted on this machine: the server never sees the data,
-the filename, or the PIN.
-
-Usage:
-  <cmd> | sharebuff             post piped text     (e.g. pbpaste | sharebuff)
-  sharebuff --clip              post your clipboard (pbpaste / wl-paste / xclip / Get-Clipboard)
-  sharebuff --file report.pdf   post a file, up to 20 MiB
-  sharebuff --short --clip      shorter link (26-char code) for typing on another machine
-
-Flags:
-`)
-		flag.PrintDefaults()
-		fmt.Fprintf(flag.CommandLine.Output(), `
-The recipient just opens the URL in a browser and types the PIN — no CLI
-needed on their side. Share the URL and the PIN over two different channels.
-`)
-	}
+	short := flag.Bool("short", false, "128-bit key: 31-char code (default 256-bit, 57 chars)")
+	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (docs/SECURITY.md)")
+	flag.Usage = usage
 	flag.Parse()
 
 	if *server == "" {
@@ -158,6 +162,16 @@ needed on their side. Share the URL and the PIN over two different channels.
 	if *pinLen < 6 {
 		fatalf("--pin-len must be at least 6")
 	}
+	if *short && *tiny {
+		fatalf("--short and --tiny are mutually exclusive")
+	}
+	keyLen := wire.KeyLenFull
+	if *short {
+		keyLen = wire.KeyLenShort
+	}
+	if *tiny {
+		keyLen = wire.KeyLenTiny
+	}
 
 	header, plain := readInput(*file, *clip)
 	if len(plain) == 0 {
@@ -166,54 +180,63 @@ needed on their side. Share the URL and the PIN over two different channels.
 	if len(plain) > wire.MaxPayload {
 		fatalf("input exceeds the %d MiB limit", wire.MaxPayload>>20)
 	}
-
-	key := wire.NewKey(*short)
-	pin := wire.NewPIN(*pinLen)
-	id, salt, err := wire.Prepare(key)
-	if err != nil {
-		fatalf("deriving id: %v", err)
-	}
-	encKey, authKey, err := wire.Derive(key, pin, salt)
-	if err != nil {
-		fatalf("deriving keys: %v", err)
-	}
 	env, err := wire.EncodeEnvelope(header, plain)
 	if err != nil {
 		fatalf("packing envelope: %v", err)
 	}
-	blob, err := wire.Seal(encKey, id, env)
-	if err != nil {
-		fatalf("encrypting: %v", err)
-	}
 
-	body, _ := json.Marshal(createReq{
-		ID:         id,
-		CT:         base64.StdEncoding.EncodeToString(blob),
-		Verifier:   wire.VerifierHex(authKey),
-		TTLSeconds: ttlSec,
-	})
+	key := wire.NewKey(keyLen)
+	pin := wire.NewPIN(*pinLen)
 	client := &http.Client{Timeout: 5 * time.Minute} // large uploads on slow links
-	resp, err := client.Post(base+"/api/secrets", "application/json", bytes.NewReader(body))
-	if err != nil {
-		fatalf("posting secret: %v", err)
-	}
-	defer resp.Body.Close()
+
+	// The locator is public and random; on the (rare) collision the server
+	// answers 409 and we simply pick another one and re-derive.
+	var locator string
 	var cr createResp
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&cr)
-	if resp.StatusCode != http.StatusCreated {
+	for attempt := 0; ; attempt++ {
+		locator = wire.NewLocator()
+		encKey, authKey, err := wire.Derive(key, pin, locator)
+		if err != nil {
+			fatalf("deriving keys: %v", err)
+		}
+		blob, err := wire.Seal(encKey, locator, env)
+		if err != nil {
+			fatalf("encrypting: %v", err)
+		}
+		body, _ := json.Marshal(createReq{
+			ID:         locator,
+			CT:         base64.StdEncoding.EncodeToString(blob),
+			Verifier:   wire.VerifierHex(authKey),
+			TTLSeconds: ttlSec,
+		})
+		resp, err := client.Post(base+"/api/secrets", "application/json", bytes.NewReader(body))
+		if err != nil {
+			fatalf("posting secret: %v", err)
+		}
+		cr = createResp{}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&cr)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusCreated {
+			break
+		}
+		if resp.StatusCode == http.StatusConflict && attempt < 5 {
+			continue
+		}
 		fatalf("server returned %s %s", resp.Status, cr.Error)
 	}
 
-	fmt.Printf("URL: %s/#%s\n", base, wire.EncodeCode(key))
+	code := wire.EncodeCode(locator, key)
+	fmt.Printf("URL: %s/#%s\n", base, code)
 	fmt.Printf("PIN: %s\n", pin)
 	what := fmt.Sprintf("text (%s): %s", humanSize(len(plain)), preview(plain))
 	if header.T == "file" {
 		what = fmt.Sprintf("file %q (%s, %s)", header.N, humanSize(len(plain)), header.M)
 	}
 	fmt.Fprintf(os.Stderr, "\nPosted %s\nEncrypted locally; the server cannot read it (not even the filename).\n", what)
+	fmt.Fprintf(os.Stderr, "Typing instead of pasting? Open %s and enter the code %s\n", base, code)
 	fmt.Fprintf(os.Stderr, "Expires %s, on the first valid retrieve, or after %d wrong PINs.\n",
 		time.Unix(cr.ExpiresAt, 0).Local().Format(time.RFC1123), wire.MaxAttempts)
-	fmt.Fprintf(os.Stderr, "Share the URL and the PIN over two different channels.\n")
+	fmt.Fprintf(os.Stderr, "Share the code/URL and the PIN over two different channels.\n")
 }
 
 // humanSize renders a byte count as B / KiB / MiB.

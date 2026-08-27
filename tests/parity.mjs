@@ -3,7 +3,7 @@
 // the browser runs — web/crypto.js (vendored noble scrypt + WebCrypto).
 // Run: node tests/parity.mjs   (regenerate vectors: go test ./internal/wire -run TestVectors -update)
 import { readFile } from 'node:fs/promises';
-import { decodeCode, prepare, derive, decrypt, parseEnvelope, b64decode, toHex } from '../web/crypto.js';
+import { decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex } from '../web/crypto.js';
 
 const vectors = JSON.parse(await readFile(new URL('../internal/wire/testdata/vectors.json', import.meta.url), 'utf8'));
 let failures = 0;
@@ -14,21 +14,18 @@ const b64 = (u8) => btoa(String.fromCharCode(...u8));
 
 for (const [i, v] of vectors.entries()) {
   // Also exercise typo tolerance: lowercase, dash-less, o-for-0, l-for-1.
-  const typed = v.key_code.toLowerCase().replaceAll('-', '').replaceAll('0', 'o').replaceAll('1', 'l');
-  const key = decodeCode(typed);
-  check(i, 'key', toHex(key), toHex(decodeCode(v.key_code)));
+  const typed = v.code.toLowerCase().replaceAll('-', '').replaceAll('0', 'o').replaceAll('1', 'l');
+  const { locator, key } = decodeCode(typed);
+  check(i, 'locator', locator, v.locator);
+  check(i, 'key', toHex(key), toHex(decodeCode(v.code).key));
 
-  const { id, salt } = await prepare(key);
-  check(i, 'id', id, v.id_b58);
-  check(i, 'salt', toHex(salt), v.salt_hex);
-
-  const keys = await derive(key, v.pin, salt);
+  const keys = await derive(key, v.pin, locator);
   check(i, 'enc_key', toHex(keys.enc), v.enc_key_hex);
   check(i, 'auth_key', toHex(keys.auth), v.auth_key_hex);
   const verifier = new Uint8Array(await crypto.subtle.digest('SHA-256', keys.auth));
   check(i, 'verifier', toHex(verifier), v.verifier_hex);
 
-  const plain = await decrypt(keys.enc, id, b64decode(v.ct_b64));
+  const plain = await decrypt(keys.enc, locator, b64decode(v.ct_b64));
   check(i, 'envelope', b64(plain), v.envelope_b64);
   const { header, payload } = parseEnvelope(plain);
   check(i, 'header', JSON.stringify(header), JSON.stringify(JSON.parse(v.header_json)));

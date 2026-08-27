@@ -17,15 +17,15 @@
     </div>
     <p class="tagline">One-shot encrypted drop for text and files. Decryption happens in your browser; the server never sees the data or the PIN.</p>
 
-    <section id="state-nosecret" hidden>
-      <div class="warnbox" role="alert">
-        <strong>⚠️ This link carries no secret</strong>
-        <p>You opened the bare Sharebuff address. A real share link continues after a <code>#</code> — that part stays in your browser and is never sent to any server. Ask the sender for the complete URL (and the PIN, ideally over a different channel).</p>
-      </div>
-    </section>
-
     <section id="state-pin" hidden>
       <form id="pin-form" autocomplete="off">
+        <div id="code-row" hidden>
+          <label for="code">Code from the sender</label>
+          <input id="code" name="code" type="text" inputmode="text" spellcheck="false"
+                 autocapitalize="characters" minlength="13" maxlength="80"
+                 placeholder="e.g. K7Q4T-N8PX2-MW3">
+          <p class="fine">No code in your link? Type it here — upper/lower case and dashes don't matter. The code never leaves your browser.</p>
+        </div>
         <label for="pin">Enter the one-time PIN you received</label>
         <input id="pin" name="pin" type="text" inputmode="text" spellcheck="false"
                autocapitalize="characters" minlength="6" maxlength="32" required
