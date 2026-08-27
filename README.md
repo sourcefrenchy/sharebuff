@@ -17,9 +17,8 @@ $ sharebuff                          # shows usage (posts nothing)
 $ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows)
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
-$ sharebuff --full --clip            # 57-char code, 256-bit key (formal post-quantum bar)
-URL: https://s.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
-PIN: basil-tigre-souple
+URL: https://s.sharebuff-worker.workers.dev/#4BBZF-TAWN6-YQY
+PIN: uguale-jersey-fogon
 ```
 
 The link carries only a **code** — Crockford base32, case-insensitive, dashes
@@ -61,8 +60,9 @@ whichever comes first.
 - **End-to-end encrypted**: AES-256-GCM keyed via memory-hard scrypt
   (N=2^16, r=8, p=1) from a random key `K` **and** the PIN, salted by a random
   public locator. Nothing stored server-side is a function of `K` alone, so an
-  attacker with the database must search key and PIN *jointly*: even `--tiny`
-  (40-bit key) costs 2⁷⁰ memory-hard scrypt evaluations offline. Encryption
+  attacker with the database must search key and PIN *jointly*: even the
+  `--tiny` default (40-bit key + 40-bit PIN) costs 2⁸⁰ memory-hard scrypt
+  evaluations offline. Encryption
   and decryption only ever happen on the sender's and recipient's machines.
 - **Zero-knowledge server**: stores `{ciphertext, SHA-256(K_auth)}`. A full
   database dump yields neither plaintext (no `K`) nor a valid claim (needs the
@@ -81,7 +81,7 @@ whichever comes first.
   creates and 256 MiB of uploads per hour (bulk dead-drop guard) — an exact
   per-IP Durable Object behind Cloudflare's (permissive, eventually-consistent)
   Rate Limiting binding, checked before any per-secret object is touched; the
-  Go server has the same limits (`-create-per-hour`, `-mib-per-hour`). Refusals, burns and rate-limit hits are
+  Go server has the same limits (`-create-per-hour`, `-mib-per-hour`). Refusals, burns, rate-limit and volume-cap hits are
   logged as structured events (Workers Logs) and optionally POSTed to an
   `ALERT_WEBHOOK` — never payloads or IPs.
 - **Bot/scanner-proof by construction**: everything secret-specific lives in
@@ -139,8 +139,8 @@ export SHAREBUFF_URL=https://s.<your-subdomain>.workers.dev   # worker is named 
 ```
 
 Optional alerting: `pnpm exec wrangler secret put ALERT_WEBHOOK` with an ntfy,
-Slack or Discord webhook URL; every `create_refused`, `secret_burned` and
-`rate_limited` event is POSTed as JSON (`{"event","ts","reasons","asn_org",
+Slack or Discord webhook URL; every `create_refused`, `secret_burned`, `rate_limited` and
+`volume_limited` event is POSTed as JSON (`{"event","ts","reasons","asn_org",
 "country"}` — no payloads, proofs or IPs). The same events always land in
 Workers Logs (observability is on).
 

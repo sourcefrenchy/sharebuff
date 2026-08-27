@@ -152,7 +152,7 @@ func main() {
 	}
 	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
 	ttl := flag.Duration("ttl", time.Hour, "time-to-live (1m..168h)")
-	pinWords := flag.Int("pin-words", 3, "PIN as N dictionary words, each from a different language (3 ≈ 38 bits, 4 ≈ 50)")
+	pinWords := flag.Int("pin-words", 3, "PIN as N dictionary words, each from a different language (3 ≈ 40 bits, 4 ≈ 52)")
 	pinLen := flag.Int("pin-len", 0, "instead of words: PIN as N random characters (min 6, 5 bits each)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
