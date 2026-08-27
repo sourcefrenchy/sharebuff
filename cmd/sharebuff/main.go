@@ -126,6 +126,9 @@ Usage:
   sharebuff --file report.pdf   post a file, up to 20 MiB
   sharebuff --tiny --clip       13-char code for typing on another machine (see docs/SECURITY.md)
 
+Code size: --tiny (13 chars, 40-bit key), --short (31, 128-bit), --full (57,
+256-bit; the default). Set SHAREBUFF_TIER=tiny|short|full to change the default.
+
 Flags:
 `)
 	flag.PrintDefaults()
@@ -146,8 +149,9 @@ func main() {
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
-	short := flag.Bool("short", false, "128-bit key: 31-char code (default 256-bit, 57 chars)")
+	short := flag.Bool("short", false, "128-bit key: 31-char code")
 	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (docs/SECURITY.md)")
+	full := flag.Bool("full", false, "256-bit key: 57-char code, the formal post-quantum bar (the default)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -162,15 +166,9 @@ func main() {
 	if *pinLen < 6 {
 		fatalf("--pin-len must be at least 6")
 	}
-	if *short && *tiny {
-		fatalf("--short and --tiny are mutually exclusive")
-	}
-	keyLen := wire.KeyLenFull
-	if *short {
-		keyLen = wire.KeyLenShort
-	}
-	if *tiny {
-		keyLen = wire.KeyLenTiny
+	keyLen, err := chooseTier(*tiny, *short, *full, os.Getenv("SHAREBUFF_TIER"))
+	if err != nil {
+		fatalf("%v", err)
 	}
 
 	header, plain := readInput(*file, *clip)
@@ -237,6 +235,37 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Expires %s, on the first valid retrieve, or after %d wrong PINs.\n",
 		time.Unix(cr.ExpiresAt, 0).Local().Format(time.RFC1123), wire.MaxAttempts)
 	fmt.Fprintf(os.Stderr, "Share the code/URL and the PIN over two different channels.\n")
+}
+
+// chooseTier resolves the key size from flags (at most one) or the
+// SHAREBUFF_TIER environment default; the built-in default is the full key.
+func chooseTier(tiny, short, full bool, env string) (int, error) {
+	n := 0
+	for _, f := range []bool{tiny, short, full} {
+		if f {
+			n++
+		}
+	}
+	if n > 1 {
+		return 0, fmt.Errorf("--tiny, --short and --full are mutually exclusive")
+	}
+	switch {
+	case tiny:
+		return wire.KeyLenTiny, nil
+	case short:
+		return wire.KeyLenShort, nil
+	case full:
+		return wire.KeyLenFull, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "", "full":
+		return wire.KeyLenFull, nil
+	case "tiny":
+		return wire.KeyLenTiny, nil
+	case "short":
+		return wire.KeyLenShort, nil
+	}
+	return 0, fmt.Errorf("SHAREBUFF_TIER must be tiny, short or full (got %q)", env)
 }
 
 // humanSize renders a byte count as B / KiB / MiB.

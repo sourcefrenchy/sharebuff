@@ -26,8 +26,10 @@ The link carries only a **code** — Crockford base32, case-insensitive, dashes
 optional — so it can be read aloud or typed by hand: the recipient can open the
 bare site and enter the code in a box instead of the address bar. Three sizes:
 `--tiny` (13 chars, 40-bit key, hardened by the PIN — see below), `--short`
-(31 chars, 128-bit) and the default (57 chars, 256-bit, the formal
-post-quantum bar). [docs/SECURITY.md](docs/SECURITY.md) has the numbers.
+(31 chars, 128-bit) and the default `--full` (57 chars, 256-bit, the formal
+post-quantum bar). Prefer tiny day to day? `export SHAREBUFF_TIER=tiny` makes
+it the default (flags still override). [docs/SECURITY.md](docs/SECURITY.md)
+has the numbers.
 
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
@@ -120,10 +122,11 @@ it with `SHAREBUFF_URL`/`--server`.
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--tiny|--short] [--clip] [--file PATH]
+sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--tiny|--short|--full] [--clip] [--file PATH]
 ```
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped
-stdin; run bare, it prints usage and posts nothing. Payloads are capped at
-20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
+stdin; run bare, it prints usage and posts nothing. Code size comes from the
+flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`), else full. Payloads are
+capped at 20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
 stderr.
