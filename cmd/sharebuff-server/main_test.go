@@ -71,7 +71,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 func newTestServer(t *testing.T) (*httptest.Server, *fakeClock) {
 	t.Helper()
 	clk := &fakeClock{t: time.Now()}
-	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: true}
 	ts := httptest.NewServer(newMux(s))
 	t.Cleanup(ts.Close)
 	return ts, clk
@@ -301,6 +301,59 @@ func TestEnvironmentSignals(t *testing.T) {
 		if share, reasons := get(h); share || len(reasons) == 0 {
 			t.Fatalf("headers %v should disable share: share=%v reasons=%v", h, share, reasons)
 		}
+	}
+}
+
+// TestCreateEnforcement: the API itself refuses creation on corporate signals,
+// so patching the page's JavaScript (or using curl) gains nothing.
+func TestCreateEnforcement(t *testing.T) {
+	ts, _ := newTestServer(t)
+	sec := makeSecret(t)
+	body, _ := json.Marshal(map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600})
+	try := func(hdr map[string]string) (int, map[string]any) {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/secrets", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	for _, hdr := range []map[string]string{
+		{"Via": "1.1 zscaler.net"},
+		{"X-Forwarded-For": "10.0.0.5, 203.0.113.9"},
+		// httptest speaks HTTP/1.1: a modern browser UA over it is the middlebox tell.
+		{"User-Agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"},
+		{"User-Agent": "Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"},
+	} {
+		if code, out := try(hdr); code != 403 || out["reasons"] == nil {
+			t.Fatalf("headers %v: expected 403 with reasons, got %d %v", hdr, code, out)
+		}
+	}
+	// Old / non-browser user agents over HTTP/1.1 are fine (curl, the CLI).
+	if code, _ := try(map[string]string{"User-Agent": "curl/8.4.0"}); code != 201 {
+		t.Fatalf("plain create refused: %d", code)
+	}
+	// Advise-only mode reports but does not refuse.
+	adv := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: true, enforce: false}
+	ts2 := httptest.NewServer(newMux(adv))
+	defer ts2.Close()
+	req, _ := http.NewRequest("POST", ts2.URL+"/api/secrets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Via", "1.1 zscaler.net")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("advise mode should accept: %d", resp.StatusCode)
 	}
 }
 

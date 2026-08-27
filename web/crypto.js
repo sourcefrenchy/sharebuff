@@ -188,7 +188,10 @@ export async function createSecret(base, { header, payload, keyBytes, pin, ttlSe
     }
     if (resp.status === 409) continue;
     const body = await resp.json().catch(() => ({}));
-    throw new Error(`server said ${resp.status}${body.error ? `: ${body.error}` : ''}`);
+    const e = new Error(`server said ${resp.status}${body.error ? `: ${body.error}` : ''}`);
+    e.status = resp.status;
+    e.reasons = body.reasons || [];
+    throw e;
   }
   throw new Error('could not find a free locator; try again');
 }

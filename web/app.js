@@ -10,7 +10,7 @@ import { WORDS } from './wordlist.js';
 
 const $ = (id) => document.getElementById(id);
 const PANELS = ['state-share', 'state-created', 'state-pin', 'state-done'];
-const show = (id) => { for (const p of PANELS) $(p).hidden = p !== id; };
+const show = (id) => { for (const p of PANELS) { const el = $(p); if (el) el.hidden = p !== id; } };
 function status(el, msg, cls = '') {
   el.textContent = msg;
   el.className = 'status ' + cls;
@@ -30,9 +30,9 @@ async function copyToClipboard(text) {
 
 // ---------------------------------------------------------------- tabs
 function selectTab(which) {
-  const share = which === 'share';
-  $('tab-share').setAttribute('aria-selected', String(share));
-  $('tab-retrieve').setAttribute('aria-selected', String(!share));
+  const share = which === 'share' && !!$('tab-share');
+  if ($('tab-share')) $('tab-share').setAttribute('aria-selected', String(share));
+  if ($('tab-retrieve')) $('tab-retrieve').setAttribute('aria-selected', String(!share));
   show(share ? 'state-share' : 'state-pin');
   (share ? $('share-text') : ($('code-row').hidden ? $('pin') : $('code'))).focus();
 }
@@ -61,15 +61,25 @@ async function corporateSignals() {
   return reasons;
 }
 
-function disableShare(reasons) {
-  $('tab-share').hidden = true;
-  const note = document.createElement('p');
-  note.className = 'warnbox';
-  note.setAttribute('role', 'note');
-  note.textContent = `Sharing from this page is turned off on corporate or managed devices to avoid posting company data by accident (${reasons.join('; ')}). You can still retrieve secrets here; use a personal device or the CLI to share.`;
-  $('state-share').replaceChildren(note);
-  if ($('tab-share').getAttribute('aria-selected') === 'true') selectTab('retrieve');
+// Remove the Share UI entirely (tab bar included): on this device/network it
+// is not usable, and the server refuses creation anyway. One quiet line under
+// Retrieve says why, so the missing feature isn't mistaken for a bug.
+function removeShare(reasons) {
+  for (const id of ['tab-share', 'state-share', 'state-created']) $(id)?.remove();
+  document.querySelector('.tabs')?.remove();
+  if (!$('share-unavailable')) {
+    const note = document.createElement('p');
+    note.id = 'share-unavailable';
+    note.className = 'fine';
+    note.textContent = `Sharing from this page isn't available on this device or network (${reasons.join('; ')}). Retrieving works as usual; to share, use a personal device or the CLI.`;
+    $('state-pin').appendChild(note);
+  }
+  selectTab('retrieve');
 }
+
+// Resolve within a bounded time so the page never hangs on the check; on
+// timeout we fail open (the server enforces regardless).
+const withTimeout = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r([]), ms))]);
 
 // ---------------------------------------------------------------- share
 let chosenFile = null;
@@ -135,7 +145,11 @@ $('create-btn').addEventListener('click', async () => {
     setShareStatus('');
     show('state-created');
   } catch (e) {
-    setShareStatus(`Could not create the link: ${e.message}`, 'err');
+    if (e.status === 403 && e.reasons && e.reasons.length) {
+      removeShare(e.reasons); // the server refused: same outcome as the page-side guard
+    } else {
+      setShareStatus(`Could not create the link: ${e.message}`, 'err');
+    }
   } finally {
     btn.disabled = false;
   }
@@ -200,6 +214,10 @@ let fromLink = null;
 if (fragment) {
   try { decodeCode(fragment); fromLink = fragment; } catch { fromLink = null; }
 }
+// The corporate check runs first so the Share UI never flashes on a device
+// where it is then removed.
+const corpReasons = await withTimeout(corporateSignals(), 1500);
+if (corpReasons.length) removeShare(corpReasons);
 if (fromLink) {
   $('code-row').hidden = true;
   selectTab('retrieve');
@@ -213,7 +231,6 @@ if (fromLink) {
     selectTab('share');
   }
 }
-corporateSignals().then((reasons) => { if (reasons.length) disableShare(reasons); });
 
 $('pin-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();

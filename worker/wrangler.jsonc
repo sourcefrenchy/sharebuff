@@ -11,5 +11,6 @@
     "bindings": [{ "name": "SECRET", "class_name": "Secret" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Secret"] }],
+  "vars": { "SHARE_POLICY": "enforce" },
   "observability": { "enabled": false }
 }

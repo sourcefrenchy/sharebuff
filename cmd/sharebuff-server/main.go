@@ -44,17 +44,51 @@ type store struct {
 	maxTTL     time.Duration
 	now        func() time.Time
 	allowShare bool
+	enforce    bool // refuse creation on corporate signals (not just report them)
 }
 
 // proxyHeaders are added by corporate secure web gateways / TLS-intercepting
 // proxies; their presence hides the browser Share tab (docs/SECURITY.md).
 var proxyHeaders = []string{"Via", "X-Bluecoat-Via", "X-Zscaler-Ip", "X-Zscaler-User", "X-Netskope-User", "Proxy-Authorization"}
 
-// environment reports whether the page may offer browser-side sharing.
-func (s *store) environment(w http.ResponseWriter, r *http.Request) {
+var (
+	chromeRe  = regexp.MustCompile(`(?:Chrome|CriOS|Chromium)/(\d+)`)
+	firefoxRe = regexp.MustCompile(`Firefox/(\d+)`)
+	safariRe  = regexp.MustCompile(`Version/(\d+)[\d.]* .*Safari/`)
+)
+
+// modernBrowser reports whether ua is a current browser, which would normally
+// speak HTTP/2+; seeing one over HTTP/1.x suggests a TLS-intercepting proxy.
+func modernBrowser(ua string) bool {
+	atLeast := func(re *regexp.Regexp, min int) (bool, bool) {
+		m := re.FindStringSubmatch(ua)
+		if m == nil {
+			return false, false
+		}
+		var v int
+		fmt.Sscanf(m[1], "%d", &v)
+		return true, v >= min
+	}
+	if ok, modern := atLeast(chromeRe, 90); ok {
+		return modern
+	}
+	if ok, modern := atLeast(firefoxRe, 90); ok {
+		return modern
+	}
+	if ok, modern := atLeast(safariRe, 14); ok {
+		return modern
+	}
+	return false
+}
+
+// signals lists the corporate-environment tells visible on this request.
+func (s *store) signals(r *http.Request) []string {
 	var reasons []string
 	if !s.allowShare {
 		reasons = append(reasons, "sharing disabled by the server operator")
+	}
+	if r.ProtoMajor == 1 && modernBrowser(r.UserAgent()) {
+		reasons = append(reasons, "modern browser arriving over "+r.Proto+" (TLS-intercepting proxy suspected)")
 	}
 	if p := strings.ToLower(r.Header.Get("X-Sharebuff-Policy")); strings.Contains(p, "retrieve-only") || strings.Contains(p, "no-share") {
 		reasons = append(reasons, "organization policy header")
@@ -70,6 +104,12 @@ func (s *store) environment(w http.ResponseWriter, r *http.Request) {
 	if reasons == nil {
 		reasons = []string{}
 	}
+	return reasons
+}
+
+// environment reports whether the page may offer browser-side sharing.
+func (s *store) environment(w http.ResponseWriter, r *http.Request) {
+	reasons := s.signals(r)
 	writeJSON(w, http.StatusOK, map[string]any{"share": len(reasons) == 0, "reasons": reasons})
 }
 
@@ -111,6 +151,13 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 		CT         string `json:"ct"`
 		Verifier   string `json:"verifier"`
 		TTLSeconds int64  `json:"ttl_seconds"`
+	}
+	// Server-side enforcement: a patched page or curl gets the same answer.
+	if s.enforce {
+		if reasons := s.signals(r); len(reasons) > 0 {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "sharing is disabled on this network", "reasons": reasons})
+			return
+		}
 	}
 	// Blob cap is ~20 MiB; base64 (+33%) plus JSON framing fits in 32 MiB.
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
@@ -233,10 +280,11 @@ func newMux(s *store) *http.ServeMux {
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8091", "listen address")
 	maxTTL := flag.Duration("max-ttl", 168*time.Hour, "maximum secret TTL")
-	share := flag.Bool("share", true, "offer browser-side sharing on the page (set false to be retrieve-only)")
+	share := flag.Bool("share", true, "allow creating secrets at all (false = retrieve-only server)")
+	enforce := flag.Bool("enforce", true, "refuse creation on corporate-network signals (proxy headers, HTTP/1.x from a modern browser); false = report only via /api/env")
 	flag.Parse()
 
-	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share}
+	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share, enforce: *enforce}
 	go s.janitor()
 	mux := newMux(s)
 

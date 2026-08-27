@@ -122,6 +122,9 @@ Request: `{"id": "<locator>", "ct": "<base64>", "verifier": "<hex>", "ttl_second
 (`ttl_seconds` omitted or 0 → the 7-day default)
 
 - `201` → `{"expires_at": <unix seconds>}`
+- `403` → `{"error": "sharing is disabled on this network", "reasons": [...]}` —
+  corporate-network signal (see SECURITY.md); nothing is stored. Not sent when
+  the server runs in advise-only mode.
 - `400` malformed field / bad base64 / ttl out of range
 - `409` locator already in use (sender retries with a new one)
 - `413` ciphertext blob larger than max envelope (4 + 4096 + 20 MiB) + 28 bytes

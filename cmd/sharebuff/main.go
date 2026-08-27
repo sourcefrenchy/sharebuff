@@ -29,8 +29,9 @@ type createReq struct {
 }
 
 type createResp struct {
-	ExpiresAt int64  `json:"expires_at"`
-	Error     string `json:"error"`
+	ExpiresAt int64    `json:"expires_at"`
+	Error     string   `json:"error"`
+	Reasons   []string `json:"reasons"`
 }
 
 func fatalf(format string, a ...any) {
@@ -230,6 +231,9 @@ func main() {
 		}
 		if resp.StatusCode == http.StatusConflict && attempt < 5 {
 			continue
+		}
+		if resp.StatusCode == http.StatusForbidden && len(cr.Reasons) > 0 {
+			fatalf("%s — %s. Use a personal device/network to share (docs/SECURITY.md).", cr.Error, strings.Join(cr.Reasons, "; "))
 		}
 		fatalf("server returned %s %s", resp.Status, cr.Error)
 	}

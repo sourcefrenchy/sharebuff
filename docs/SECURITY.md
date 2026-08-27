@@ -59,34 +59,44 @@ the sender's page (cleared after posting), and clipboard reads require a click
 plus the browser's own permission prompt. The CLI remains the option for
 scripts and for hosts where you don't want to trust a browser.
 
-### Corporate and managed devices: the Share tab hides itself
+### Corporate and managed devices: creation is refused, and the Share UI is removed
 
 Browser-side sharing is a convenience, and on a company machine it is also an
-easy way to post company data somewhere it shouldn't go. The page therefore
-hides the Share tab (Retrieve keeps working) when any of three independent
-signals fires:
+easy way to post company data somewhere it shouldn't go. Two layers handle
+this. **The server enforces**: `POST /api/secrets` answers `403` (nothing
+stored) when the request shows a corporate-network signal, so a patched page,
+DevTools, or curl all get the same refusal (`SHARE_POLICY=advise` on the
+Worker / `-enforce=false` on the Go server downgrade this to report-only).
+**The page removes the Share tab entirely** — tab bar included — when the
+same check (`GET /api/env`) or the managed-browser API says so, leaving
+Retrieve and one line explaining why. The signals:
 
 1. **Managed browser.** Chrome and Edge expose `navigator.managed` only when
    an enterprise policy is applied; if `getManagedConfiguration()` resolves,
    the device is managed.
-2. **Secure web gateway / TLS-intercepting proxy** (server-side, via
-   `GET /api/env`): the request's egress ASN organization matches a known SWG
-   vendor (Zscaler, Netskope, Palo Alto Prisma, Forcepoint, iboss, Menlo,
-   Symantec/Broadcom, Cisco Umbrella, Cato, Check Point, Fortinet, Skyhigh),
-   or it carries proxy-injected headers (`Via`, `X-BlueCoat-Via`,
-   `X-Zscaler-*`, `X-Netskope-*`, `Proxy-Authorization`, or a multi-hop
-   `X-Forwarded-For`).
+2. **Secure web gateway / TLS-intercepting proxy** (server-side): the
+   request's egress ASN organization matches a known SWG vendor (Zscaler,
+   Netskope, Palo Alto Prisma, Forcepoint, iboss, Menlo, Symantec/Broadcom,
+   Cisco Umbrella, Cato, Check Point, Fortinet, Skyhigh); it carries
+   proxy-injected headers (`Via`, `X-BlueCoat-Via`, `X-Zscaler-*`,
+   `X-Netskope-*`, `Proxy-Authorization`, or a multi-hop `X-Forwarded-For`);
+   or a **current browser arrives over HTTP/1.x** — browsers speak HTTP/2/3 to
+   Cloudflare, TLS-intercepting proxies usually re-originate as HTTP/1.1.
+   None of these can be removed from inside the browser: the proxy stamps
+   them on its own outbound connection, and the ASN is a property of the
+   network.
 3. **Organization kill-switch.** IT can inject `X-Sharebuff-Policy:
    retrieve-only` at their proxy (deterministic, no heuristics), run the
    self-hosted server with `-share=false`, or simply DNS-block the host.
 
-**Limits, stated plainly:** this is a guard against *accidental* policy
-breaches, not data-loss prevention. Signals 1–2 are heuristics — a personal
-device on a corporate Wi-Fi can trip them (false positive: use the CLI), and a
-determined insider can bypass all of them (curl against the API, or any other
-paste site). Real exfiltration control belongs in the organization's DLP and
-egress policy; signal 3 is there so those policies can switch this page off
-with one header.
+**Limits, stated plainly:** this is a *network* control. A corporate laptop
+on a phone hotspot, or a corporate network without a recognizable gateway,
+looks like home Wi-Fi — device-level enforcement is the organization's MDM/DLP
+job. Signal 1 is the only device-based tell and it stays client-side
+(bypassable). Heuristics can also misfire on a personal device behind a
+corporate proxy (use the CLI from another network). And no matter what,
+an insider can use any other paste site; the goal is that *this* one refuses
+to be the channel from recognizable corporate egress.
 
 ## Threat 1 — online guessing (someone has the code, not the PIN; or neither)
 

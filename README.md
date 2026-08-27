@@ -36,11 +36,12 @@ or `Get-Clipboard` (Windows PowerShell).
 **No CLI at hand?** Open the site itself: the **Share** tab pastes text (or reads
 the clipboard, or takes a file), encrypts it in the browser with the very same
 code the Retrieve tab uses, and hands you the link and the 3-word PIN with copy
-buttons. The server still only ever receives ciphertext. On **corporate or
-managed devices** the Share tab hides itself (managed-browser API, secure-web-
-gateway/proxy signals, or an IT-injected `X-Sharebuff-Policy: retrieve-only`
-header) so company data isn't posted by accident — details and limits in
-[docs/SECURITY.md](docs/SECURITY.md).
+buttons. The server still only ever receives ciphertext. From **corporate
+networks** the server refuses to create secrets at all (secure-web-gateway ASN,
+proxy-stamped headers, a modern browser arriving over HTTP/1.1, or an IT-
+injected `X-Sharebuff-Policy: retrieve-only` header) and the page removes the
+Share tab — so company data isn't posted by accident, and patching the page
+JavaScript changes nothing. Details and limits in [docs/SECURITY.md](docs/SECURITY.md).
 
 The CLI defaults to the deployed Worker
 (`https://s.sharebuff-worker.workers.dev`); point it elsewhere with
