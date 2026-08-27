@@ -184,6 +184,12 @@ curl -s https://s.sharebuff-worker.workers.dev/app.js | shasum -a 256
 
 Hashes for each tagged release are listed in the release notes.
 
+## License
+
+[MIT](LICENSE) © 2026 jmamblat ([github.com/sourcefrenchy](https://github.com/sourcefrenchy)).
+Commercial use, modification and forks are welcome — keep the copyright and
+license notice.
+
 ## CLI usage
 
 ```
