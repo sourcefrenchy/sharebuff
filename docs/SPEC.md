@@ -27,7 +27,7 @@ sizes, single KDF stage). Older links are not supported.
 | locator | 5 random alphabet chars (25 bits); the server-side record id; also the KDF salt |
 | K       | random key: 5 bytes (`--tiny`, the default), 16 bytes (`--short`) or 32 bytes (`--full`) |
 | code    | `locator ‖ base32(K)`, dash-grouped by 5 → 13 / 31 / 57 chars normalized |
-| PIN     | 6 alphabet chars (default; `--pin-len` ≥ 6) |
+| PIN     | 3 dictionary words joined by `-` (default; 6,134-word list → 37.7 bits; `--pin-words N`) or `--pin-len N` alphabet chars |
 | scrypt  | N=2^16, r=8, p=1, dkLen=64 (~64 MiB, memory-hard) |
 | cipher  | AES-256-GCM, 12-byte random nonce |
 | max payload | 20 MiB (20971520 bytes) |
@@ -40,7 +40,10 @@ sizes, single KDF stage). Older links are not supported.
 
 Codes and PINs are typed by humans, so both are normalized before use:
 uppercase; strip spaces and hyphens; map `O→0`, `I→1`, `L→1`. Generated
-tokens never contain the ambiguous characters.
+codes never contain the ambiguous characters; word PINs may (e.g. `oil`),
+which is harmless because sender and recipient normalize identically and the
+attacker's search space is the dictionary either way. The recipient never
+needs the dictionary.
 
 ```
 code = group5(locator ‖ crockford_base32_nopad(K))     e.g. K7Q4T-N8PX2-MW3

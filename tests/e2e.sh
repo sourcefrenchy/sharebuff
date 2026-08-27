@@ -24,13 +24,16 @@ URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
 CODE=${URL#*#}; NORM=$(printf "%s" "$CODE" | tr -d "-")
 [ ${#NORM} -eq 13 ] || { echo "default tier should be tiny (13 chars), got ${#NORM}: $CODE"; exit 1; }
 echo "-- default tier is tiny: $CODE"
+[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 2 ] || { echo "default PIN should be 3 dash-joined words, got: $PIN"; exit 1; }
+echo "-- default PIN is 3 words: $PIN"
 echo "-- wrong PIN must not burn (403)"
 node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 403
 echo "-- immediate retry hits the cooldown (429, uncounted)"
 node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 429
 sleep 3
-echo "-- correct PIN retrieves and decrypts"
-GOT=$(node tests/e2e.mjs "$URL" "$PIN")
+echo "-- correct PIN retrieves and decrypts (typed with spaces and capitals)"
+TYPEDPIN=$(printf "%s" "$PIN" | tr "-" " " | tr "a-z" "A-Z")
+GOT=$(node tests/e2e.mjs "$URL" "$TYPEDPIN")
 [ "$GOT" = "$PLAINTEXT" ] || { echo "PLAINTEXT MISMATCH"; exit 1; }
 echo "-- second claim finds a tombstone (410)"
 node tests/e2e.mjs "$URL" "$PIN" --expect-status 410

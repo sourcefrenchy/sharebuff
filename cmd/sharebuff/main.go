@@ -130,6 +130,9 @@ Code size: --tiny (13 chars, 40-bit key; the default — hardened by the PIN,
 see docs/SECURITY.md), --short (31, 128-bit), --full (57, 256-bit).
 Set SHAREBUFF_TIER=tiny|short|full to change the default.
 
+PIN: 3 dictionary words by default (e.g. basil-tundra-koala, 37.7 bits);
+--pin-words 4 for 50 bits, or --pin-len N for N random characters.
+
 Flags:
 `)
 	flag.PrintDefaults()
@@ -147,7 +150,8 @@ func main() {
 	}
 	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
 	ttl := flag.Duration("ttl", 168*time.Hour, "time-to-live (1m..168h)")
-	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
+	pinWords := flag.Int("pin-words", 3, "PIN as N dictionary words (6,134-word list, 12.6 bits each)")
+	pinLen := flag.Int("pin-len", 0, "instead of words: PIN as N random characters (min 6, 5 bits each)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
 	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (the default)")
@@ -164,8 +168,11 @@ func main() {
 	if ttlSec < wire.MinTTLSeconds || ttlSec > wire.MaxTTLSeconds {
 		fatalf("--ttl must be between 1m and 168h")
 	}
-	if *pinLen < 6 {
+	if *pinLen != 0 && *pinLen < 6 {
 		fatalf("--pin-len must be at least 6")
+	}
+	if *pinWords < 2 {
+		fatalf("--pin-words must be at least 2")
 	}
 	keyLen, err := chooseTier(*tiny, *short, *full, os.Getenv("SHAREBUFF_TIER"))
 	if err != nil {
@@ -185,7 +192,10 @@ func main() {
 	}
 
 	key := wire.NewKey(keyLen)
-	pin := wire.NewPIN(*pinLen)
+	pin := newWordPIN(*pinWords)
+	if *pinLen > 0 {
+		pin = wire.NewPIN(*pinLen)
+	}
 	client := &http.Client{Timeout: 5 * time.Minute} // large uploads on slow links
 
 	// The locator is public and random; on the (rare) collision the server

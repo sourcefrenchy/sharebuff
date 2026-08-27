@@ -19,7 +19,7 @@ $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
 $ sharebuff --full --clip            # 57-char code, 256-bit key (formal post-quantum bar)
 URL: https://sharebuff.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
-PIN: 7KQ4TN
+PIN: basil-tundra-koala
 ```
 
 The link carries only a **code** — Crockford base32, case-insensitive, dashes
@@ -37,7 +37,9 @@ The CLI defaults to the deployed Worker
 (`https://sharebuff.sharebuff-worker.workers.dev`); point it elsewhere with
 `SHAREBUFF_URL` or `--server`.
 
-Share the URL and the PIN over **two different channels**. The secret dies on
+The PIN is three dictionary words (37.7 bits; `--pin-words 4` for 50) — easy to
+read out loud, and the recipient can type them in any case with spaces or
+dashes. Share the URL and the PIN over **two different channels**. The secret dies on
 the first valid retrieve, after 10 wrong PINs (burn), or after 7 days —
 whichever comes first.
 
@@ -122,7 +124,7 @@ it with `SHAREBUFF_URL`/`--server`.
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--tiny|--short|--full] [--clip] [--file PATH]
+sharebuff [--server URL] [--ttl 168h] [--pin-words 3 | --pin-len N] [--tiny|--short|--full] [--clip] [--file PATH]
 ```
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped

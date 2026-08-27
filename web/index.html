@@ -28,8 +28,8 @@
         </div>
         <label for="pin">Enter the one-time PIN you received</label>
         <input id="pin" name="pin" type="text" inputmode="text" spellcheck="false"
-               autocapitalize="characters" minlength="6" maxlength="32" required
-               placeholder="e.g. 7KQ4TN">
+               autocapitalize="none" autocorrect="off" minlength="6" maxlength="64" required
+               placeholder="e.g. basil-tundra-koala">
         <button id="claim-btn" type="submit">Unlock &amp; copy to clipboard</button>
       </form>
       <p class="fine">Retrieving with the correct PIN permanently destroys the secret on the server. A wrong PIN does not (10 attempts allowed, with a short cooldown after each miss).</p>
