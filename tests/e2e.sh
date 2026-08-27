@@ -21,6 +21,9 @@ echo "== text mode (stdin) =="
 PLAINTEXT='hello from the E2E test — été 🔐'
 OUT=$(printf '%s' "$PLAINTEXT" | post)
 URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
+CODE=${URL#*#}; NORM=$(printf "%s" "$CODE" | tr -d "-")
+[ ${#NORM} -eq 13 ] || { echo "default tier should be tiny (13 chars), got ${#NORM}: $CODE"; exit 1; }
+echo "-- default tier is tiny: $CODE"
 echo "-- wrong PIN must not burn (403)"
 node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 403
 echo "-- immediate retry hits the cooldown (429, uncounted)"
@@ -32,13 +35,13 @@ GOT=$(node tests/e2e.mjs "$URL" "$PIN")
 echo "-- second claim finds a tombstone (410)"
 node tests/e2e.mjs "$URL" "$PIN" --expect-status 410
 
-for TIER in tiny short; do
+for TIER in tiny short full; do
   echo "== --$TIER link, typed by hand (lowercase, no dashes, o/l for 0/1) =="
   OUT=$(printf "%s tier payload" "$TIER" | post --$TIER)
   URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
   CODE=${URL#*#}
   NORM=$(printf "%s" "$CODE" | tr -d "-")
-  WANT=13; [ "$TIER" = short ] && WANT=31
+  WANT=13; [ "$TIER" = short ] && WANT=31; [ "$TIER" = full ] && WANT=57
   [ ${#NORM} -eq $WANT ] || { echo "$TIER code has ${#NORM} chars, want $WANT: $CODE"; exit 1; }
   TYPED=$(printf "%s" "$CODE" | tr "A-Z" "a-z" | tr -d "-" | tr "01" "ol")
   GOT=$(node tests/e2e.mjs "${URL%%#*}#$TYPED" "$(printf "%s" "$PIN" | tr "A-Z" "a-z")")

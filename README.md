@@ -17,7 +17,7 @@ $ sharebuff                          # shows usage (posts nothing)
 $ sharebuff --clip                   # sends your clipboard (macOS/Linux/Windows)
 $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
-$ sharebuff --tiny --clip            # 13-char code, for typing on another machine
+$ sharebuff --full --clip            # 57-char code, 256-bit key (formal post-quantum bar)
 URL: https://sharebuff.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
 PIN: 7KQ4TN
 ```
@@ -25,11 +25,10 @@ PIN: 7KQ4TN
 The link carries only a **code** — Crockford base32, case-insensitive, dashes
 optional — so it can be read aloud or typed by hand: the recipient can open the
 bare site and enter the code in a box instead of the address bar. Three sizes:
-`--tiny` (13 chars, 40-bit key, hardened by the PIN — see below), `--short`
-(31 chars, 128-bit) and the default `--full` (57 chars, 256-bit, the formal
-post-quantum bar). Prefer tiny day to day? `export SHAREBUFF_TIER=tiny` makes
-it the default (flags still override). [docs/SECURITY.md](docs/SECURITY.md)
-has the numbers.
+`--tiny` (13 chars, 40-bit key hardened by the PIN — **the default**),
+`--short` (31 chars, 128-bit) and `--full` (57 chars, 256-bit, the formal
+post-quantum bar). Want the full key by default? `export SHAREBUFF_TIER=full`
+(flags still override). [docs/SECURITY.md](docs/SECURITY.md) has the numbers.
 
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
@@ -68,7 +67,7 @@ whichever comes first.
   send to any server. Opening the link is stateless; only a deliberately
   submitted PIN changes anything.
 - **Quantum stance**: purely symmetric crypto — nothing for Shor's algorithm;
-  the default tier keeps ≥128-bit strength under Grover. Full analysis of
+  `--full` keeps ≥128-bit strength under Grover. Full analysis of
   online, offline and quantum attacks per tier: [docs/SECURITY.md](docs/SECURITY.md).
 - Strict CSP (`default-src 'none'`), no third-party requests, no analytics;
   the only vendored JS is [@noble/hashes](https://github.com/paulmillr/noble-hashes)
@@ -127,6 +126,6 @@ sharebuff [--server URL] [--ttl 168h] [--pin-len 6] [--tiny|--short|--full] [--c
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped
 stdin; run bare, it prints usage and posts nothing. Code size comes from the
-flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`), else full. Payloads are
+flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`), else tiny. Payloads are
 capped at 20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
 stderr.

@@ -25,7 +25,7 @@ sizes, single KDF stage). Older links are not supported.
 |---------|-------|
 | alphabet | Crockford base32 `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no I/L/O/U) for locators, keys and PINs |
 | locator | 5 random alphabet chars (25 bits); the server-side record id; also the KDF salt |
-| K       | random key: 5 bytes (`--tiny`), 16 bytes (`--short`) or 32 bytes (default) |
+| K       | random key: 5 bytes (`--tiny`, the default), 16 bytes (`--short`) or 32 bytes (`--full`) |
 | code    | `locator ‖ base32(K)`, dash-grouped by 5 → 13 / 31 / 57 chars normalized |
 | PIN     | 6 alphabet chars (default; `--pin-len` ≥ 6) |
 | scrypt  | N=2^16, r=8, p=1, dkLen=64 (~64 MiB, memory-hard) |
@@ -96,9 +96,9 @@ ct    = standard base64 of blob (with padding)
 ## Retrieve URL
 
 ```
-https://<host>/#K7Q4T-N8PX2-MW3                       (--tiny)
+https://<host>/#K7Q4T-N8PX2-MW3                       (--tiny, default)
 https://<host>/#K7Q4T-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X (--short)
-https://<host>/#K7Q4T-…                               (default, 57 chars)
+https://<host>/#K7Q4T-…                               (--full, 57 chars)
 ```
 
 The fragment is the code. Browsers never transmit fragments, so opening a

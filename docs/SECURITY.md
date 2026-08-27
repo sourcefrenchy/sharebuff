@@ -15,7 +15,7 @@ A **code** is `LOCATOR-KEY`:
 | part | size | who sees it | purpose |
 |---|---|---|---|
 | locator | 5 chars (25 bits), random | the server (it is the record id) | find the record; salt the KDF |
-| key `K` | 40 / 128 / 256 bits (`--tiny` / `--short` / default) | **only the sender and recipient** | the secret that actually protects the data |
+| key `K` | 40 / 128 / 256 bits (`--tiny` (default) / `--short` / `--full`) | **only the sender and recipient** | the secret that actually protects the data |
 | PIN | 6 chars (30 bits), random | only the sender and recipient | second factor, delivered out-of-band |
 
 Everything the browser needs to decrypt — key and PIN — is entered client-side
@@ -74,9 +74,9 @@ scrypt hostile to GPUs and ASICs.
 
 | tier | key | key + PIN | scrypt evaluations to exhaust | at 10⁶ guesses/s (an unrealistic memory-hard farm) |
 |---|---|---|---|---|
-| `--tiny` | 40 bits | **70 bits** | 2⁷⁰ ≈ 1.2 × 10²¹ | ~37 million years |
+| `--tiny` (default) | 40 bits | **70 bits** | 2⁷⁰ ≈ 1.2 × 10²¹ | ~37 million years |
 | `--short` | 128 bits | 158 bits | 2¹⁵⁸ | beyond physics |
-| default | 256 bits | 286 bits | 2²⁸⁶ | beyond physics |
+| `--full` | 256 bits | 286 bits | 2²⁸⁶ | beyond physics |
 
 Secrets also live at most 7 days and die on first retrieve, so the attacker's
 window is short and most records in a dump are tombstones. Raising the PIN
@@ -94,14 +94,15 @@ no tier can help — that is the recipient's endpoint, not the protocol.
   to target. Recorded ciphertext cannot be "opened later" by a quantum
   computer the way TLS-only protection can.
 - Grover's algorithm gives at most a square-root speed-up on symmetric search.
-  For the **default tier** that leaves AES-256 / a 286-bit search at ≥128-bit
+  For **`--full`** that leaves AES-256 / a 286-bit search at ≥128-bit
   post-quantum strength — the bar NIST accepts for symmetric crypto.
 - For `--short` (158 → ~79 bits) and `--tiny` (70 → ~35 bits), Grover would
   have to evaluate *scrypt itself* inside a quantum circuit, keeping 64 MiB of
   state coherent per evaluation, in a sequential search. No known or projected
-  hardware makes that practical; still, these tiers sit below the formal
-  256-bit bar, which is why the default is the full key and `--tiny` is an
-  explicit opt-in for the "type it by hand" case.
+  hardware makes that practical; still, these tiers sit below the *formal*
+  256-bit bar. `--tiny` is the default because typeability is the point of
+  the tool; use `--full` (or `SHAREBUFF_TIER=full`) for material that must
+  meet the formal post-quantum bar on paper.
 - In transit, Cloudflare's edge negotiates hybrid post-quantum TLS
   (X25519 + ML-KEM) with modern browsers, so even the transport layer resists
   recording attacks — and what it carries is already AES-256 ciphertext.

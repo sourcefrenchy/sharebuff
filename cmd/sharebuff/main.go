@@ -124,10 +124,11 @@ Usage:
   <cmd> | sharebuff             post piped text     (e.g. pbpaste | sharebuff)
   sharebuff --clip              post your clipboard (pbpaste / wl-paste / xclip / Get-Clipboard)
   sharebuff --file report.pdf   post a file, up to 20 MiB
-  sharebuff --tiny --clip       13-char code for typing on another machine (see docs/SECURITY.md)
+  sharebuff --full --clip       57-char code with a 256-bit key (formal post-quantum bar)
 
-Code size: --tiny (13 chars, 40-bit key), --short (31, 128-bit), --full (57,
-256-bit; the default). Set SHAREBUFF_TIER=tiny|short|full to change the default.
+Code size: --tiny (13 chars, 40-bit key; the default — hardened by the PIN,
+see docs/SECURITY.md), --short (31, 128-bit), --full (57, 256-bit).
+Set SHAREBUFF_TIER=tiny|short|full to change the default.
 
 Flags:
 `)
@@ -149,9 +150,9 @@ func main() {
 	pinLen := flag.Int("pin-len", 6, "PIN length (min 6)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
+	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (the default)")
 	short := flag.Bool("short", false, "128-bit key: 31-char code")
-	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (docs/SECURITY.md)")
-	full := flag.Bool("full", false, "256-bit key: 57-char code, the formal post-quantum bar (the default)")
+	full := flag.Bool("full", false, "256-bit key: 57-char code, the formal post-quantum bar (docs/SECURITY.md)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -238,7 +239,7 @@ func main() {
 }
 
 // chooseTier resolves the key size from flags (at most one) or the
-// SHAREBUFF_TIER environment default; the built-in default is the full key.
+// SHAREBUFF_TIER environment default; the built-in default is the tiny key.
 func chooseTier(tiny, short, full bool, env string) (int, error) {
 	n := 0
 	for _, f := range []bool{tiny, short, full} {
@@ -258,10 +259,10 @@ func chooseTier(tiny, short, full bool, env string) (int, error) {
 		return wire.KeyLenFull, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(env)) {
-	case "", "full":
-		return wire.KeyLenFull, nil
-	case "tiny":
+	case "", "tiny":
 		return wire.KeyLenTiny, nil
+	case "full":
+		return wire.KeyLenFull, nil
 	case "short":
 		return wire.KeyLenShort, nil
 	}
