@@ -23,7 +23,7 @@ if (file) {
   payload = new Uint8Array(Buffer.concat(chunks));
   header = { t: 'text' };
 }
-const pin = newWordPin(WORDS, Number(opt('--words', 3)));
+const pin = newWordPin(WORDS, Number(opt('--words', 4)));
 const { code } = await createSecret(base, { header, payload, keyBytes: Number(opt('--tier', 5)), pin });
 console.log(`URL: ${base}/#${code}`);
 console.log(`PIN: ${pin}`);

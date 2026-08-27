@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 ADDR=127.0.0.1:8391
 SERVER_URL="http://$ADDR"
 TMP=$(mktemp -d)
-./sharebuff-server -addr "$ADDR" &
+./sharebuff-server -addr "$ADDR" -create-rpm 0 -claim-rpm 0 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null || true; rm -rf "$TMP"' EXIT
 sleep 1
@@ -24,8 +24,8 @@ URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
 CODE=${URL#*#}; NORM=$(printf "%s" "$CODE" | tr -d "-")
 [ ${#NORM} -eq 13 ] || { echo "default tier should be tiny (13 chars), got ${#NORM}: $CODE"; exit 1; }
 echo "-- default tier is tiny: $CODE"
-[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 2 ] || { echo "default PIN should be 3 dash-joined words, got: $PIN"; exit 1; }
-echo "-- default PIN is 3 words: $PIN"
+[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 3 ] || { echo "default PIN should be 4 dash-joined words, got: $PIN"; exit 1; }
+echo "-- default PIN is 4 words: $PIN"
 echo "-- wrong PIN must not burn (403)"
 node tests/e2e.mjs "$URL" "AAAAAA" --expect-status 403
 echo "-- immediate retry hits the cooldown (429, uncounted)"
@@ -64,10 +64,13 @@ if [ "$(uname)" = "Darwin" ]; then
   [ "$GOT" = "$CLIPTEXT" ] || { echo "CLIPBOARD MISMATCH"; exit 1; }
 fi
 
-echo "== file mode (3 MiB binary, byte-exact) =="
+echo "== file mode (3 MiB binary, byte-exact; auto-escalates to the 128-bit key) =="
 head -c 3145728 /dev/urandom > "$TMP/blob.pdf"
 OUT=$(post --file "$TMP/blob.pdf")
 URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
+CODE=${URL#*#}; NORM=$(printf "%s" "$CODE" | tr -d "-")
+[ ${#NORM} -eq 31 ] || { echo "file should auto-escalate to short (31 chars), got ${#NORM}: $CODE"; exit 1; }
+echo "-- file got the short tier automatically: $CODE"
 node tests/e2e.mjs "$URL" "$PIN" > "$TMP/blob.out" 2> "$TMP/blob.info"
 grep -q '"t":"file"' "$TMP/blob.info" && grep -q '"n":"blob.pdf"' "$TMP/blob.info" \
   || { echo "FILE HEADER MISSING: $(cat "$TMP/blob.info")"; exit 1; }
@@ -84,12 +87,25 @@ URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
 GOT=$(node tests/e2e.mjs "$URL" "$PIN")
 [ "$GOT" = 'from the browser share tab — été 🔐' ] || { echo "BROWSER-SHARE TEXT MISMATCH: $GOT"; exit 1; }
 echo "-- browser-shared text retrieved: $URL"
-OUT=$(node tests/share.mjs "$SERVER_URL" --file "$TMP/blob.pdf" --tier 32 --words 4)
+OUT=$(node tests/share.mjs "$SERVER_URL" --file "$TMP/blob.pdf" --tier 32 --words 6)
 URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
-[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 3 ] || { echo "expected 4-word PIN, got $PIN"; exit 1; }
+[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 5 ] || { echo "expected 6-word PIN, got $PIN"; exit 1; }
 node tests/e2e.mjs "$URL" "$PIN" > "$TMP/blob2.out" 2>/dev/null
 [ "$(shasum -a 256 < "$TMP/blob.pdf")" = "$(shasum -a 256 < "$TMP/blob2.out")" ] || { echo "BROWSER-SHARE FILE MISMATCH"; exit 1; }
-echo "-- browser-shared 3 MiB file (full tier, 4-word PIN) retrieved byte-exact"
+echo "-- browser-shared 3 MiB file (full tier, 6-word PIN) retrieved byte-exact"
+
+echo "== per-IP rate limit (separate server, 3 creates/min) =="
+./sharebuff-server -addr 127.0.0.1:8392 -create-rpm 3 -claim-rpm 30 >/dev/null 2>&1 &
+RL_PID=$!
+sleep 1
+CODES=""
+for i in 1 2 3 4; do
+  C=$(printf 'burst %s' "$i" | ./sharebuff --server http://127.0.0.1:8392 >/dev/null 2>"$TMP/rl.err" && echo 201 || (grep -q "429" "$TMP/rl.err" && echo 429 || echo ERR))
+  CODES="$CODES $C"
+done
+kill $RL_PID 2>/dev/null || true
+[ "$CODES" = " 201 201 201 429" ] || { echo "rate limit burst gave:$CODES (want 201 201 201 429)"; exit 1; }
+echo "-- 4th create in a minute → 429"
 
 echo "== oversize file is rejected locally =="
 head -c $((20*1024*1024+1)) /dev/zero > "$TMP/toobig.bin"

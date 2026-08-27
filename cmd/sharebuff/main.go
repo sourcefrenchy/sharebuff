@@ -127,12 +127,13 @@ Usage:
   sharebuff --file report.pdf   post a file, up to 20 MiB
   sharebuff --full --clip       57-char code with a 256-bit key (formal post-quantum bar)
 
-Code size: --tiny (13 chars, 40-bit key; the default — hardened by the PIN,
-see docs/SECURITY.md), --short (31, 128-bit), --full (57, 256-bit).
-Set SHAREBUFF_TIER=tiny|short|full to change the default.
+Code size: small text gets --tiny (13 chars, 40-bit key); files and text over
+4 KiB automatically get --short (31 chars, 128-bit) so a leaked PIN alone can
+never unlock a stolen copy. --full (57 chars, 256-bit) is the formal
+post-quantum bar. Set SHAREBUFF_TIER=tiny|short|full to fix a default.
 
-PIN: 3 dictionary words by default (e.g. basil-tundra-koala, 37.7 bits);
---pin-words 4 for 50 bits, or --pin-len N for N random characters.
+PIN: 4 dictionary words by default (e.g. basil-tundra-koala-oxide, 50 bits);
+--pin-words 3 or 6, or --pin-len N for N random characters (5 bits each).
 
 Flags:
 `)
@@ -151,13 +152,14 @@ func main() {
 	}
 	server := flag.String("server", envOr, "server base URL (or SHAREBUFF_URL env)")
 	ttl := flag.Duration("ttl", 168*time.Hour, "time-to-live (1m..168h)")
-	pinWords := flag.Int("pin-words", 3, "PIN as N dictionary words (6,134-word list, 12.6 bits each)")
+	pinWords := flag.Int("pin-words", 4, "PIN as N dictionary words (6,134-word list, 12.6 bits each; 4 = 50 bits)")
 	pinLen := flag.Int("pin-len", 0, "instead of words: PIN as N random characters (min 6, 5 bits each)")
 	clip := flag.Bool("clip", false, "read from the system clipboard even when stdin is piped")
 	file := flag.String("file", "", "send this file instead of text (filename/MIME are encrypted too)")
 	tiny := flag.Bool("tiny", false, "40-bit key: 13-char code, easy to type by hand; PIN-hardened (the default)")
 	short := flag.Bool("short", false, "128-bit key: 31-char code")
 	full := flag.Bool("full", false, "256-bit key: 57-char code, the formal post-quantum bar (docs/SECURITY.md)")
+	noPreview := flag.Bool("no-preview", false, "do not echo a 40-char preview of the text to the terminal")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -175,12 +177,11 @@ func main() {
 	if *pinWords < 2 {
 		fatalf("--pin-words must be at least 2")
 	}
-	keyLen, err := chooseTier(*tiny, *short, *full, os.Getenv("SHAREBUFF_TIER"))
+	header, plain := readInput(*file, *clip)
+	keyLen, escalated, err := chooseTier(*tiny, *short, *full, os.Getenv("SHAREBUFF_TIER"), header.T == "file", len(plain))
 	if err != nil {
 		fatalf("%v", err)
 	}
-
-	header, plain := readInput(*file, *clip)
 	if len(plain) == 0 {
 		fatalf("nothing to share (empty input)")
 	}
@@ -242,19 +243,55 @@ func main() {
 	fmt.Printf("URL: %s/#%s\n", base, code)
 	fmt.Printf("PIN: %s\n", pin)
 	what := fmt.Sprintf("text (%s): %s", humanSize(len(plain)), preview(plain))
+	if *noPreview {
+		what = fmt.Sprintf("text (%s)", humanSize(len(plain)))
+	}
 	if header.T == "file" {
 		what = fmt.Sprintf("file %q (%s, %s)", header.N, humanSize(len(plain)), header.M)
 	}
 	fmt.Fprintf(os.Stderr, "\nPosted %s\nEncrypted locally; the server cannot read it (not even the filename).\n", what)
+	if escalated {
+		fmt.Fprintf(os.Stderr, "Using a 128-bit key (31-char code) for this payload: %s. Pass --tiny to force the 13-char code.\n", escalated_reason(header.T == "file"))
+	}
 	fmt.Fprintf(os.Stderr, "Typing instead of pasting? Open %s and enter the code %s\n", base, code)
 	fmt.Fprintf(os.Stderr, "Expires %s, on the first valid retrieve, or after %d wrong PINs.\n",
 		time.Unix(cr.ExpiresAt, 0).Local().Format(time.RFC1123), wire.MaxAttempts)
 	fmt.Fprintf(os.Stderr, "Share the code/URL and the PIN over two different channels.\n")
 }
 
-// chooseTier resolves the key size from flags (at most one) or the
-// SHAREBUFF_TIER environment default; the built-in default is the tiny key.
-func chooseTier(tiny, short, full bool, env string) (int, error) {
+// AutoEscalateBytes is the text size above which the automatic tier choice
+// prefers the 128-bit key: a leaked PIN plus a stolen ciphertext must not be
+// enough to crack a large or file payload (THREAT-REVIEW T3).
+const AutoEscalateBytes = 4096
+
+func escalated_reason(isFile bool) string {
+	if isFile {
+		return "files always get it"
+	}
+	return fmt.Sprintf("text over %d bytes", AutoEscalateBytes)
+}
+
+// chooseTier resolves the key size: an explicit flag wins, then the
+// SHAREBUFF_TIER environment default; otherwise files and text larger than
+// AutoEscalateBytes get the short (128-bit) key and small text stays tiny.
+// The second result reports whether the automatic escalation kicked in.
+func chooseTier(tiny, short, full bool, env string, isFile bool, size int) (int, bool, error) {
+	n, err := chooseTierExplicit(tiny, short, full, env)
+	if err != nil {
+		return 0, false, err
+	}
+	if n != 0 {
+		return n, false, nil
+	}
+	if isFile || size > AutoEscalateBytes {
+		return wire.KeyLenShort, true, nil
+	}
+	return wire.KeyLenTiny, false, nil
+}
+
+// chooseTierExplicit returns 0 when neither a flag nor the environment picks
+// a tier (i.e. the automatic rule applies).
+func chooseTierExplicit(tiny, short, full bool, env string) (int, error) {
 	n := 0
 	for _, f := range []bool{tiny, short, full} {
 		if f {
@@ -273,7 +310,9 @@ func chooseTier(tiny, short, full bool, env string) (int, error) {
 		return wire.KeyLenFull, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(env)) {
-	case "", "tiny":
+	case "":
+		return 0, nil
+	case "tiny":
 		return wire.KeyLenTiny, nil
 	case "full":
 		return wire.KeyLenFull, nil

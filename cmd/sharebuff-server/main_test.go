@@ -71,7 +71,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 func newTestServer(t *testing.T) (*httptest.Server, *fakeClock) {
 	t.Helper()
 	clk := &fakeClock{t: time.Now()}
-	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: true}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: true, rl: make(map[string]*window)}
 	ts := httptest.NewServer(newMux(s))
 	t.Cleanup(ts.Close)
 	return ts, clk
@@ -341,7 +341,7 @@ func TestCreateEnforcement(t *testing.T) {
 		t.Fatalf("plain create refused: %d", code)
 	}
 	// Advise-only mode reports but does not refuse.
-	adv := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: true, enforce: false}
+	adv := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: true, enforce: false, rl: make(map[string]*window)}
 	ts2 := httptest.NewServer(newMux(adv))
 	defer ts2.Close()
 	req, _ := http.NewRequest("POST", ts2.URL+"/api/secrets", bytes.NewReader(body))
@@ -358,7 +358,7 @@ func TestCreateEnforcement(t *testing.T) {
 }
 
 func TestShareDisabledByOperator(t *testing.T) {
-	s := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: false}
+	s := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: false, rl: make(map[string]*window)}
 	ts := httptest.NewServer(newMux(s))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/api/env")
@@ -373,6 +373,80 @@ func TestShareDisabledByOperator(t *testing.T) {
 	}
 }
 
+// TestRateLimit: per-IP fixed windows on create and claim, 429 with
+// Retry-After, and the window resets with the clock.
+func TestRateLimit(t *testing.T) {
+	clk := &fakeClock{t: time.Now()}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: false,
+		createRPM: 3, claimRPM: 2, rl: make(map[string]*window)}
+	ts := httptest.NewServer(newMux(s))
+	defer ts.Close()
+
+	codes := []int{}
+	for i := 0; i < 4; i++ {
+		sec := makeSecret(t)
+		code, _ := post(t, ts.URL+"/api/secrets", map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600})
+		codes = append(codes, code)
+	}
+	if codes[0] != 201 || codes[1] != 201 || codes[2] != 201 || codes[3] != 429 {
+		t.Fatalf("create burst codes = %v, want 201 201 201 429", codes)
+	}
+	clk.Advance(61 * time.Second)
+	sec := makeSecret(t)
+	if code, _ := post(t, ts.URL+"/api/secrets", map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600}); code != 201 {
+		t.Fatalf("after window reset: %d", code)
+	}
+	// Claims: 2 per minute, the third is limited regardless of proof validity.
+	claimURL := ts.URL + "/api/secrets/" + sec.id + "/claim"
+	bad := "00" + sec.authHex[2:]
+	post(t, claimURL, map[string]string{"auth": bad})
+	clk.Advance(3 * time.Second) // past the per-record cooldown
+	post(t, claimURL, map[string]string{"auth": bad})
+	clk.Advance(5 * time.Second)
+	if code, body := post(t, claimURL, map[string]string{"auth": sec.authHex}); code != 429 || body["retry_after_seconds"] == nil {
+		t.Fatalf("third claim in window: code=%d body=%v", code, body)
+	}
+}
+
+// TestAlertWebhook: refused creates and burns POST a JSON event (no payload,
+// no IP) to the configured webhook.
+func TestAlertWebhook(t *testing.T) {
+	events := make(chan map[string]any, 4)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ev map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&ev)
+		events <- ev
+	}))
+	defer hook.Close()
+	s := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: true, enforce: true,
+		rl: make(map[string]*window), alertWebhook: hook.URL}
+	ts := httptest.NewServer(newMux(s))
+	defer ts.Close()
+	sec := makeSecret(t)
+	body, _ := json.Marshal(map[string]any{"id": sec.id, "ct": sec.ct, "verifier": sec.verifier, "ttl_seconds": 3600})
+	req, _ := http.NewRequest("POST", ts.URL+"/api/secrets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Via", "1.1 zscaler.net")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	select {
+	case ev := <-events:
+		if ev["event"] != "create_refused" || ev["reasons"] == nil {
+			t.Fatalf("unexpected event %v", ev)
+		}
+		for _, forbidden := range []string{"ct", "auth", "ip"} {
+			if _, ok := ev[forbidden]; ok {
+				t.Fatalf("alert leaked %s", forbidden)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no webhook event received")
+	}
+}
+
 func TestStaticPageHeaders(t *testing.T) {
 	ts, _ := newTestServer(t)
 	resp, err := http.Get(ts.URL + "/")
@@ -383,7 +457,7 @@ func TestStaticPageHeaders(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /: %d", resp.StatusCode)
 	}
-	for _, h := range []string{"Content-Security-Policy", "Referrer-Policy", "X-Content-Type-Options", "Strict-Transport-Security"} {
+	for _, h := range []string{"Content-Security-Policy", "Referrer-Policy", "X-Content-Type-Options", "Strict-Transport-Security", "Permissions-Policy"} {
 		if resp.Header.Get(h) == "" {
 			t.Fatalf("missing header %s", h)
 		}

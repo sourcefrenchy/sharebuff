@@ -38,7 +38,11 @@ func TestNewWordPIN(t *testing.T) {
 			t.Fatalf("bad word %q in %q", p, pin)
 		}
 	}
-	if newWordPIN(3) == pin && newWordPIN(3) == pin {
-		t.Fatal("PINs are not random")
+	seen := map[string]bool{pin: true}
+	for i := 0; i < 20; i++ {
+		seen[newWordPIN(3)] = true
+	}
+	if len(seen) < 20 {
+		t.Fatalf("PINs are not random: only %d distinct in 21 draws", len(seen))
 	}
 }

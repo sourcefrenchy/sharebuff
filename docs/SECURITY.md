@@ -15,8 +15,8 @@ A **code** is `LOCATOR-KEY`:
 | part | size | who sees it | purpose |
 |---|---|---|---|
 | locator | 5 chars (25 bits), random | the server (it is the record id) | find the record; salt the KDF |
-| key `K` | 40 / 128 / 256 bits (`--tiny` (default) / `--short` / `--full`) | **only the sender and recipient** | the secret that actually protects the data |
-| PIN | 3 dictionary words (37.7 bits; `--pin-words 4` → 50 bits; or `--pin-len N` random chars at 5 bits each) | only the sender and recipient | second factor, delivered out-of-band |
+| key `K` | 40 / 128 / 256 bits (`--tiny` / `--short` / `--full`; **automatic**: tiny for small text, short for files and text > 4 KiB) | **only the sender and recipient** | the secret that actually protects the data |
+| PIN | **4 dictionary words (50.3 bits)** by default; 3 or 6 words, or random characters (`--pin-len N`, 5 bits each; the page offers 16 = 80 bits) | only the sender and recipient | second factor, delivered out-of-band |
 
 Everything the browser needs to decrypt — key and PIN — is entered client-side
 (URL fragment or the page's input boxes). Fragments are never transmitted by
@@ -100,8 +100,9 @@ to be the channel from recognizable corporate egress.
 
 ## Threat 1 — online guessing (someone has the code, not the PIN; or neither)
 
-Each claim costs the client a full scrypt (~1 s, 64 MiB) — a built-in
-proof-of-work — and the server enforces, per secret:
+Each claim costs an honest client a full scrypt (~1 s, 64 MiB); note this is
+**not** enforced server-side (an attacker can post raw proofs), so the real
+online controls are the server's, per secret and per IP:
 
 - **10 counted wrong attempts, then the secret burns** (fail-closed).
 - **Exponential cooldown** after each miss: 2 s, 4 s, 8 s … capped at 5 min.
@@ -111,9 +112,11 @@ proof-of-work — and the server enforces, per secret:
 - The record is **tombstoned before the ciphertext is returned**; concurrent
   valid claims yield exactly one winner (Durable Objects serialize per id).
 
-With 37.7 bits of PIN (or 77+ bits of key+PIN for someone who only has the
-locator), 10 guesses have a success probability of about 1 in 22 billion at
-best. Online attacks are not the limiting factor in any tier.
+Per IP, the edge also caps creates at 10/min and claims at 30/min (429,
+checked before any Durable Object is touched), which bounds locator-scanning
+and burn-by-volume. With 50.3 bits of PIN (or 90+ bits of key+PIN for someone
+who only has the locator), 10 guesses succeed with probability about
+1 in 140 trillion. Online attacks are not the limiting factor in any tier.
 
 ## Threat 2 — offline attack after a server breach
 
@@ -124,16 +127,29 @@ scrypt hostile to GPUs and ASICs.
 
 | tier | key | key + PIN | scrypt evaluations to exhaust | at 10⁶ guesses/s (an unrealistic memory-hard farm) |
 |---|---|---|---|---|
-| `--tiny` (default) | 40 bits | **77.7 bits** | 2⁷⁷·⁷ ≈ 2.6 × 10²³ | ~8 billion years |
-| `--short` | 128 bits | 165.7 bits | 2¹⁶⁵·⁷ | beyond physics |
-| `--full` | 256 bits | 293.7 bits | 2²⁹³·⁷ | beyond physics |
+| `--tiny` (small text) | 40 bits | **90.3 bits** | 2⁹⁰·³ ≈ 1.5 × 10²⁷ | ~50 trillion years |
+| `--short` (files, large text) | 128 bits | 178.3 bits | 2¹⁷⁸·³ | beyond physics |
+| `--full` | 256 bits | 306.3 bits | 2³⁰⁶·³ | beyond physics |
+
+When the attacker *also* holds one of the two factors, the other is all that
+is left:
+
+| attacker also has | must search | `--tiny` | `--short` | `--full` |
+|---|---|---|---|---|
+| the **link** (K known) | PIN, 50.3 bits | 4.4 M core-years — 100 k cores ≈ 44 y | same | same |
+| the **PIN** | K only | 40 bits: 3 500 core-years — 100 k cores ≈ 13 d, a 1 000-GPU farm ≈ 2 d | 2¹²⁸ — infeasible | 2²⁵⁶ — infeasible |
+
+That second row is why the key size is automatic: anything that is a file or
+larger than 4 KiB gets the 128-bit key, so a leaked PIN alone never unlocks a
+stolen copy of it; the 13-char tiny code is reserved for short clipboard text.
 
 Secrets also live at most 7 days and die on first retrieve, so the attacker's
-window is short and most records in a dump are tombstones. A fourth word
-(`--pin-words 4` → 50.3 bits) adds 12.6 bits to every tier.
+window is short and most records in a dump are tombstones. Six words
+(`--pin-words 6` → 75 bits) or a 16-character random PIN (80 bits) put the
+leaked-link case beyond reach entirely.
 
-The PIN is 3 words from a 6,134-word list (the EFF long list, 4–8 letters).
-The list is public — assume the attacker has it; entropy is 3 × log₂(6134).
+The PIN is 4 words from a 6,134-word list (the EFF long list, 4–8 letters).
+The list is public — assume the attacker has it; entropy is 4 × log₂(6134).
 Words beat random characters at equal entropy because people type and read
 them aloud correctly; adding more languages only helps by enlarging the pool.
 
@@ -151,7 +167,7 @@ no tier can help — that is the recipient's endpoint, not the protocol.
 - Grover's algorithm gives at most a square-root speed-up on symmetric search.
   For **`--full`** that leaves AES-256 / a 286-bit search at ≥128-bit
   post-quantum strength — the bar NIST accepts for symmetric crypto.
-- For `--short` (166 → ~83 bits) and `--tiny` (78 → ~39 bits), Grover would
+- For `--short` (178 → ~89 bits) and `--tiny` (90 → ~45 bits), Grover would
   have to evaluate *scrypt itself* inside a quantum circuit, keeping 64 MiB of
   state coherent per evaluation, in a sequential search. No known or projected
   hardware makes that practical; still, these tiers sit below the *formal*
@@ -171,7 +187,7 @@ no tier can help — that is the recipient's endpoint, not the protocol.
   would store the key. Shorten the hostname instead (custom domain), or type
   the code into the page.
 - **Leaked link**: an adversary with the code but not the PIN gets 10 paced
-  guesses at 37.7 bits; if the link leaks, the sender should assume the secret
+  guesses at 50.3 bits; if the link leaks, the sender should assume the secret
   may be burned (10 garbage claims) — fail-closed by design.
 
 ## Threat 5 — the public locator
@@ -186,7 +202,18 @@ at the edge is the natural next step if it ever matters.
 ## One-page attack/timing summary
 
 See [THREAT-MODEL.md](THREAT-MODEL.md) for the scenario table with concrete
-work factors and timings for the `--tiny` default.
+work factors and timings, and [THREAT-REVIEW.md](THREAT-REVIEW.md) for the
+independent review whose findings (T1–T12, F1–F13) shaped the current design.
+
+## Detection: structured alerts
+
+The Worker logs `create_refused` (with reasons, egress ASN organization and
+country), `secret_burned` (locator) and `rate_limited` (bucket) as JSON to
+Workers Logs, and POSTs the same events to `ALERT_WEBHOOK` when that secret
+is set. Payloads, proofs and client IPs are never included. The self-hosted
+server logs the same events and accepts `-alert-webhook`; it lacks the ASN
+signal (headers and HTTP-version tells only), so its corporate detection is
+weaker than the Worker's.
 
 ## Out of scope
 

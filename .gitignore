@@ -4,3 +4,4 @@ node_modules/
 worker/.wrangler/
 .DS_Store
 dist/
+worker/worker-configuration.d.ts

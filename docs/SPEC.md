@@ -25,9 +25,9 @@ sizes, single KDF stage). Older links are not supported.
 |---------|-------|
 | alphabet | Crockford base32 `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no I/L/O/U) for locators, keys and PINs |
 | locator | 5 random alphabet chars (25 bits); the server-side record id; also the KDF salt |
-| K       | random key: 5 bytes (`--tiny`, the default), 16 bytes (`--short`) or 32 bytes (`--full`) |
+| K       | random key: 5 bytes (`--tiny`), 16 bytes (`--short`) or 32 bytes (`--full`); default is automatic — tiny for text ≤ 4096 bytes, short for files and larger text |
 | code    | `locator ‖ base32(K)`, dash-grouped by 5 → 13 / 31 / 57 chars normalized |
-| PIN     | 3 dictionary words joined by `-` (default; 6,134-word list → 37.7 bits; `--pin-words N`) or `--pin-len N` alphabet chars |
+| PIN     | 4 dictionary words joined by `-` (default; 6,134-word list → 50.3 bits; `--pin-words N`) or `--pin-len N` alphabet chars |
 | scrypt  | N=2^16, r=8, p=1, dkLen=64 (~64 MiB, memory-hard) |
 | cipher  | AES-256-GCM, 12-byte random nonce |
 | max payload | 20 MiB (20971520 bytes) |
@@ -125,6 +125,8 @@ Request: `{"id": "<locator>", "ct": "<base64>", "verifier": "<hex>", "ttl_second
 - `403` → `{"error": "sharing is disabled on this network", "reasons": [...]}` —
   corporate-network signal (see SECURITY.md); nothing is stored. Not sent when
   the server runs in advise-only mode.
+- `429` → `{"error": "too many requests", "retry_after_seconds": 60}` — per-IP
+  limit (10 creates per minute).
 - `400` malformed field / bad base64 / ttl out of range
 - `409` locator already in use (sender retries with a new one)
 - `413` ciphertext blob larger than max envelope (4 + 4096 + 20 MiB) + 28 bytes
@@ -149,6 +151,8 @@ Request: `{"auth": "<hex>"}`
 - `410` → `{"reason": "claimed"|"burned"}` — destroyed earlier (tombstone kept
   until original expiry).
 - `404` unknown or expired locator.
+- `429` with `{"error": "too many requests", ...}` (no `attempts_left`) — the
+  per-IP claim limit (30 per minute), applied before the record is looked up.
 
 ### `GET /api/env`
 
@@ -168,6 +172,7 @@ Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'
 Referrer-Policy: no-referrer
 X-Content-Type-Options: nosniff
 Strict-Transport-Security: max-age=31536000; includeSubDomains
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
 Cache-Control: no-store
 ```
 

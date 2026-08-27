@@ -19,16 +19,18 @@ $ some-command | sharebuff           # sends piped text
 $ sharebuff --file report.pdf        # sends a file (≤ 20 MiB)
 $ sharebuff --full --clip            # 57-char code, 256-bit key (formal post-quantum bar)
 URL: https://s.sharebuff-worker.workers.dev/#K7Q4T-N8PX2-MW3
-PIN: basil-tundra-koala
+PIN: basil-tundra-koala-oxide
 ```
 
 The link carries only a **code** — Crockford base32, case-insensitive, dashes
 optional — so it can be read aloud or typed by hand: the recipient can open the
 bare site and enter the code in a box instead of the address bar. Three sizes:
-`--tiny` (13 chars, 40-bit key hardened by the PIN — **the default**),
-`--short` (31 chars, 128-bit) and `--full` (57 chars, 256-bit, the formal
-post-quantum bar). Want the full key by default? `export SHAREBUFF_TIER=full`
-(flags still override). [docs/SECURITY.md](docs/SECURITY.md) has the numbers.
+`--tiny` (13 chars, 40-bit key hardened by the PIN), `--short` (31 chars,
+128-bit) and `--full` (57 chars, 256-bit, the formal post-quantum bar). By
+default the size is **automatic**: short clipboard text gets the 13-char code;
+files and text over 4 KiB get the 128-bit key, so a leaked PIN plus a stolen
+copy is never enough to unlock them. Flags or `SHAREBUFF_TIER=tiny|short|full`
+override. [docs/SECURITY.md](docs/SECURITY.md) has the numbers.
 
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
@@ -47,9 +49,9 @@ The CLI defaults to the deployed Worker
 (`https://s.sharebuff-worker.workers.dev`); point it elsewhere with
 `SHAREBUFF_URL` or `--server`.
 
-The PIN is three dictionary words (37.7 bits; `--pin-words 4` for 50) — easy to
-read out loud, and the recipient can type them in any case with spaces or
-dashes. Share the URL and the PIN over **two different channels**. The secret dies on
+The PIN is **four dictionary words (50 bits)** — easy to read out loud, and the
+recipient can type them in any case with spaces or dashes. `--pin-words 3` or
+`6`, or `--pin-len N` for random characters. Share the URL and the PIN over **two different channels**. The secret dies on
 the first valid retrieve, after 10 wrong PINs (burn), or after 7 days —
 whichever comes first.
 
@@ -74,6 +76,11 @@ whichever comes first.
   rejects further claims with `429` *before the proof is examined*, and those
   are **not counted**: hammering the endpoint can neither brute-force the PIN
   nor burn the secret by volume.
+- **Rate-limited at the edge**: 10 creates and 30 claims per IP per minute
+  (Workers Rate Limiting binding; the Go server has the same limits), checked
+  before any Durable Object is touched. Refusals, burns and rate-limit hits are
+  logged as structured events (Workers Logs) and optionally POSTed to an
+  `ALERT_WEBHOOK` — never payloads or IPs.
 - **Bot/scanner-proof by construction**: everything secret-specific lives in
   the URL *fragment*, which browsers, link-preview bots and URL scanners never
   send to any server. Opening the link is stateless; only a deliberately
@@ -98,6 +105,7 @@ whichever comes first.
 | `docs/SPEC.md` | the protocol spec (source of truth) |
 | `docs/SECURITY.md` | threat model: brute force, offline, quantum — per tier |
 | `docs/THREAT-MODEL.md` | one-page scenario table with work factors and timings |
+| `docs/THREAT-REVIEW.md` | independent static analysis & threat review (2026-08-27) that drove the v4.1 hardening |
 
 ## Build & test
 
@@ -127,18 +135,39 @@ pnpm exec wrangler deploy
 export SHAREBUFF_URL=https://s.<your-subdomain>.workers.dev   # worker is named "s" for a short host
 ```
 
+Optional alerting: `pnpm exec wrangler secret put ALERT_WEBHOOK` with an ntfy,
+Slack or Discord webhook URL; every `create_refused`, `secret_burned` and
+`rate_limited` event is POSTed as JSON (`{"event","ts","reasons","asn_org",
+"country"}` — no payloads, proofs or IPs). The same events always land in
+Workers Logs (observability is on).
+
 **Self-hosted (fallback):** run `dist/sharebuff-server-<platform>` (e.g.
-`-addr 127.0.0.1:8091`) behind any TLS-terminating proxy, and point the CLI at
-it with `SHAREBUFF_URL`/`--server`.
+`-addr 127.0.0.1:8091 -trust-proxy-headers -alert-webhook https://…`) behind
+any TLS-terminating proxy, and point the CLI at it with `SHAREBUFF_URL`/
+`--server`. Flags: `-create-rpm`/`-claim-rpm` (per-IP limits), `-enforce`
+(corporate-network refusal), `-share=false` (retrieve-only).
+
+## Verify the page you were served
+
+The browser client is first-party JavaScript, so its integrity is what a
+compromised origin would attack. `make integrity` prints the SHA-256 of every
+file the page runs; compare against what you receive:
+
+```
+curl -s https://s.sharebuff-worker.workers.dev/app.js | shasum -a 256
+```
+
+Hashes for each tagged release are listed in the release notes.
 
 ## CLI usage
 
 ```
-sharebuff [--server URL] [--ttl 168h] [--pin-words 3 | --pin-len N] [--tiny|--short|--full] [--clip] [--file PATH]
+sharebuff [--server URL] [--ttl 168h] [--pin-words 4 | --pin-len N] [--tiny|--short|--full] [--clip] [--file PATH] [--no-preview]
 ```
 
 Input precedence: `--file`, then `--clip` (system clipboard), then piped
 stdin; run bare, it prints usage and posts nothing. Code size comes from the
-flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`), else tiny. Payloads are
-capped at 20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
+flag, else `SHAREBUFF_TIER` (`tiny`/`short`/`full`), else automatic (tiny for
+small text, short for files and text over 4 KiB). `--no-preview` suppresses
+the 40-char echo of the text. Payloads are capped at 20 MiB. `URL:` and `PIN:` go to stdout (script-friendly); guidance goes to
 stderr.

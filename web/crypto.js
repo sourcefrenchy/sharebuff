@@ -195,3 +195,20 @@ export async function createSecret(base, { header, payload, keyBytes, pin, ttlSe
   }
   throw new Error('could not find a free locator; try again');
 }
+
+// Random-character PIN: n Crockford characters grouped by 4 (80 bits at 16).
+// normalizeCode strips the dashes on entry, so grouping is purely cosmetic.
+export function newCharPin(n) {
+  const raw = randomToken(n);
+  const groups = [];
+  for (let i = 0; i < raw.length; i += 4) groups.push(raw.slice(i, i + 4));
+  return groups.join('-');
+}
+
+// Automatic key-tier rule shared with the CLI: files and text over 4 KiB get
+// the 128-bit key so a leaked PIN plus a stolen ciphertext is never enough;
+// small text keeps the 13-char tiny code. Returns key bytes.
+export const AUTO_ESCALATE_BYTES = 4096;
+export function autoKeyBytes(isFile, size) {
+  return isFile || size > AUTO_ESCALATE_BYTES ? 16 : 5;
+}

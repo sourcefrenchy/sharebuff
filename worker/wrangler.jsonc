@@ -12,5 +12,9 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Secret"] }],
   "vars": { "SHARE_POLICY": "enforce" },
-  "observability": { "enabled": false }
+  "ratelimits": [
+    { "name": "CREATE_LIMIT", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "CLAIM_LIMIT",  "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
+  ],
+  "observability": { "enabled": true }
 }

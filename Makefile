@@ -17,7 +17,7 @@ LDFLAGS := -s -w
 GOBUILD  = CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(3) ./cmd/$(4)
 
 .DEFAULT_GOAL := help
-.PHONY: help all macos linux windows build test parity e2e release deploy wordlist jsvectors clean
+.PHONY: help all macos linux windows build test parity e2e release deploy wordlist jsvectors integrity clean
 
 help:
 	@echo "Sharebuff — one-shot end-to-end-encrypted drop (clipboard text & files)"
@@ -76,6 +76,10 @@ release: test all
 
 deploy:
 	cd worker && CI=true pnpm install && CI=true pnpm exec wrangler deploy
+
+## Print SHA-256 of the page scripts so a served copy can be verified (README)
+integrity:
+	@cd web && shasum -a 256 app.js crypto.js scrypt.js wordlist.js index.html style.css
 
 ## Regenerate browser-encrypted vectors that the Go tests must decrypt
 jsvectors:

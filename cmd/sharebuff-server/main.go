@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -45,6 +47,71 @@ type store struct {
 	now        func() time.Time
 	allowShare bool
 	enforce    bool // refuse creation on corporate signals (not just report them)
+
+	// Per-IP fixed-window rate limits (requests per minute); 0 disables.
+	createRPM, claimRPM int
+	trustProxy          bool // honour X-Real-IP / X-Forwarded-For for the client IP
+	rl                  map[string]*window
+	alertWebhook        string
+}
+
+type window struct {
+	start time.Time
+	count int
+}
+
+// clientIP returns the address used for rate limiting.
+func (s *store) clientIP(r *http.Request) string {
+	if s.trustProxy {
+		if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+			return ip
+		}
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			return strings.TrimSpace(strings.Split(xff, ",")[0])
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// allow applies a per-IP fixed window of rpm requests per minute for the
+// given bucket. Caller must hold s.mu.
+func (s *store) allow(bucket, ip string, rpm int, now time.Time) (ok bool, retryAfter int) {
+	if rpm <= 0 {
+		return true, 0
+	}
+	key := bucket + "|" + ip
+	w := s.rl[key]
+	if w == nil || now.Sub(w.start) >= time.Minute {
+		s.rl[key] = &window{start: now, count: 1}
+		return true, 0
+	}
+	if w.count >= rpm {
+		return false, int(time.Minute-now.Sub(w.start))/int(time.Second) + 1
+	}
+	w.count++
+	return true, 0
+}
+
+// alert emits a structured event to the log and, if configured, to the
+// webhook. Never includes payloads, proofs, or client IPs.
+func (s *store) alert(event string, fields map[string]any) {
+	fields["event"] = event
+	fields["ts"] = time.Now().UTC().Format(time.RFC3339)
+	b, _ := json.Marshal(fields)
+	log.Printf("alert %s", b)
+	if s.alertWebhook != "" {
+		go func() {
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Post(s.alertWebhook, "application/json", bytes.NewReader(b))
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+	}
 }
 
 // proxyHeaders are added by corporate secure web gateways / TLS-intercepting
@@ -130,6 +197,11 @@ func (s *store) janitor() {
 				delete(s.m, id)
 			}
 		}
+		for k, w := range s.rl {
+			if now.Sub(w.start) >= 2*time.Minute {
+				delete(s.rl, k)
+			}
+		}
 		s.mu.Unlock()
 	}
 }
@@ -155,9 +227,19 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 	// Server-side enforcement: a patched page or curl gets the same answer.
 	if s.enforce {
 		if reasons := s.signals(r); len(reasons) > 0 {
+			s.alert("create_refused", map[string]any{"reasons": reasons, "ua": r.UserAgent()})
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "sharing is disabled on this network", "reasons": reasons})
 			return
 		}
+	}
+	s.mu.Lock()
+	ok, retry := s.allow("create", s.clientIP(r), s.createRPM, s.now())
+	s.mu.Unlock()
+	if !ok {
+		s.alert("rate_limited", map[string]any{"bucket": "create"})
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many requests", "retry_after_seconds": retry})
+		return
 	}
 	// Blob cap is ~20 MiB; base64 (+33%) plus JSON framing fits in 32 MiB.
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
@@ -215,6 +297,12 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
+	if ok, retry := s.allow("claim", s.clientIP(r), s.claimRPM, now); !ok {
+		s.alert("rate_limited", map[string]any{"bucket": "claim"})
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many requests", "retry_after_seconds": retry})
+		return
+	}
 	rec, ok := s.m[id]
 	if !ok || now.After(rec.expiresAt) {
 		delete(s.m, id)
@@ -239,6 +327,7 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 		if rec.attempts >= wire.MaxAttempts {
 			// Burn: keep only a tombstone until the original expiry.
 			s.m[id] = &record{gone: "burned", expiresAt: rec.expiresAt}
+			s.alert("secret_burned", map[string]any{"locator": id})
 			writeJSON(w, http.StatusGone, map[string]string{"reason": "burned"})
 			return
 		}
@@ -263,6 +352,7 @@ func staticHandler() http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 		h.Set("Cache-Control", "no-store")
 		files.ServeHTTP(w, r)
 	})
@@ -282,9 +372,14 @@ func main() {
 	maxTTL := flag.Duration("max-ttl", 168*time.Hour, "maximum secret TTL")
 	share := flag.Bool("share", true, "allow creating secrets at all (false = retrieve-only server)")
 	enforce := flag.Bool("enforce", true, "refuse creation on corporate-network signals (proxy headers, HTTP/1.x from a modern browser); false = report only via /api/env")
+	createRPM := flag.Int("create-rpm", 10, "per-IP creates per minute (0 = unlimited)")
+	claimRPM := flag.Int("claim-rpm", 30, "per-IP claims per minute (0 = unlimited)")
+	trustProxy := flag.Bool("trust-proxy-headers", false, "use X-Real-IP / X-Forwarded-For as the client IP (only behind a proxy you control)")
+	alertWebhook := flag.String("alert-webhook", "", "POST JSON alert events (create_refused, secret_burned, rate_limited) to this URL")
 	flag.Parse()
 
-	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share, enforce: *enforce}
+	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share, enforce: *enforce,
+		createRPM: *createRPM, claimRPM: *claimRPM, trustProxy: *trustProxy, rl: make(map[string]*window), alertWebhook: *alertWebhook}
 	go s.janitor()
 	mux := newMux(s)
 
