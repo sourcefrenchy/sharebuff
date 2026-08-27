@@ -17,7 +17,7 @@ LDFLAGS := -s -w
 GOBUILD  = CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) go build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(3) ./cmd/$(4)
 
 .DEFAULT_GOAL := help
-.PHONY: help all macos linux windows build test parity e2e release deploy clean
+.PHONY: help all macos linux windows build test parity e2e release deploy wordlist jsvectors clean
 
 help:
 	@echo "Sharebuff — one-shot end-to-end-encrypted drop (clipboard text & files)"
@@ -76,6 +76,16 @@ release: test all
 
 deploy:
 	cd worker && CI=true pnpm install && CI=true pnpm exec wrangler deploy
+
+## Regenerate browser-encrypted vectors that the Go tests must decrypt
+jsvectors:
+	node tests/gen-js-vectors.mjs
+
+## Regenerate web/wordlist.js from the CLI wordlist (single source of truth)
+wordlist:
+	{ echo "// Generated from cmd/sharebuff/wordlist.txt (EFF long list, 4–8 letters, 6,134 words)."; \
+	  echo "// Regenerate: make wordlist. tests/parity.mjs asserts this matches the Go list."; \
+	  printf "export const WORDS = "; python3 -c "import json;print(json.dumps(open('cmd/sharebuff/wordlist.txt').read().split()))"; echo ";"; } > web/wordlist.js
 
 clean:
 	rm -rf $(DIST) sharebuff sharebuff-server

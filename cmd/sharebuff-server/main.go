@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,10 +39,38 @@ type record struct {
 }
 
 type store struct {
-	mu     sync.Mutex
-	m      map[string]*record
-	maxTTL time.Duration
-	now    func() time.Time
+	mu         sync.Mutex
+	m          map[string]*record
+	maxTTL     time.Duration
+	now        func() time.Time
+	allowShare bool
+}
+
+// proxyHeaders are added by corporate secure web gateways / TLS-intercepting
+// proxies; their presence hides the browser Share tab (docs/SECURITY.md).
+var proxyHeaders = []string{"Via", "X-Bluecoat-Via", "X-Zscaler-Ip", "X-Zscaler-User", "X-Netskope-User", "Proxy-Authorization"}
+
+// environment reports whether the page may offer browser-side sharing.
+func (s *store) environment(w http.ResponseWriter, r *http.Request) {
+	var reasons []string
+	if !s.allowShare {
+		reasons = append(reasons, "sharing disabled by the server operator")
+	}
+	if p := strings.ToLower(r.Header.Get("X-Sharebuff-Policy")); strings.Contains(p, "retrieve-only") || strings.Contains(p, "no-share") {
+		reasons = append(reasons, "organization policy header")
+	}
+	for _, h := range proxyHeaders {
+		if r.Header.Get(h) != "" {
+			reasons = append(reasons, "proxy header "+strings.ToLower(h))
+		}
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); strings.Count(xff, ",") >= 1 {
+		reasons = append(reasons, "forwarded through a proxy")
+	}
+	if reasons == nil {
+		reasons = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"share": len(reasons) == 0, "reasons": reasons})
 }
 
 // cooldown returns the wait imposed after the n-th counted wrong attempt.
@@ -196,6 +225,7 @@ func newMux(s *store) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/secrets", s.create)
 	mux.HandleFunc("POST /api/secrets/{id}/claim", s.claim)
+	mux.HandleFunc("GET /api/env", s.environment)
 	mux.Handle("GET /", staticHandler())
 	return mux
 }
@@ -203,9 +233,10 @@ func newMux(s *store) *http.ServeMux {
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8091", "listen address")
 	maxTTL := flag.Duration("max-ttl", 168*time.Hour, "maximum secret TTL")
+	share := flag.Bool("share", true, "offer browser-side sharing on the page (set false to be retrieve-only)")
 	flag.Parse()
 
-	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now}
+	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share}
 	go s.janitor()
 	mux := newMux(s)
 

@@ -147,6 +147,15 @@ Request: `{"auth": "<hex>"}`
   until original expiry).
 - `404` unknown or expired locator.
 
+### `GET /api/env`
+
+`{"share": bool, "reasons": [string]}` — whether the page may offer
+browser-side sharing. `share` is false when the server sees a corporate
+environment signal (organization policy header `X-Sharebuff-Policy:
+retrieve-only`, secure-web-gateway egress ASN, proxy-injected headers) or the
+operator disabled it (`-share=false`). See SECURITY.md. No secret material is
+involved; the page fails open if the endpoint is unreachable.
+
 ### `GET /`
 
 The static retrieve page. Response headers (both servers):
@@ -159,7 +168,21 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 Cache-Control: no-store
 ```
 
-## Client claim flow (web/app.js)
+## Client create flow (web/app.js, Share tab)
+
+1. Payload from the paste box, `navigator.clipboard.readText()` (user
+   gesture + browser permission) or a file picker; cap 20 MiB.
+2. `key = getRandomValues(5|16|32)`, `PIN = 3–4 words` from the embedded
+   wordlist (`web/wordlist.js` = the CLI's list), `locator = randomToken(5)`.
+3. `derive` → `encrypt` (AES-256-GCM, AAD bound to the locator) → `POST
+   /api/secrets`; on `409` pick a new locator and re-derive.
+4. Show `origin/#code` and the PIN; clear the plaintext from the page.
+
+Cross-implementation conformance: `tests/parity.mjs` decrypts Go-encrypted
+vectors in JS; `internal/wire/testdata/js_vectors.json` (from
+`tests/gen-js-vectors.mjs`) holds browser-encrypted secrets that Go must open.
+
+## Client claim flow (web/app.js, Retrieve tab)
 
 1. Take the code from the fragment, or from the Code field; decode → locator + K.
 2. User types the PIN (explicit user action — headless scanners stop here).

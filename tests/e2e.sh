@@ -78,6 +78,19 @@ echo "-- sha256 match ($H1)"
 echo "-- file secret is one-shot too (410)"
 node tests/e2e.mjs "$URL" "$PIN" --expect-status 410
 
+echo "== browser Share path (tests/share.mjs → web/crypto.js), text + file =="
+OUT=$(printf 'from the browser share tab — été 🔐' | node tests/share.mjs "$SERVER_URL")
+URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
+GOT=$(node tests/e2e.mjs "$URL" "$PIN")
+[ "$GOT" = 'from the browser share tab — été 🔐' ] || { echo "BROWSER-SHARE TEXT MISMATCH: $GOT"; exit 1; }
+echo "-- browser-shared text retrieved: $URL"
+OUT=$(node tests/share.mjs "$SERVER_URL" --file "$TMP/blob.pdf" --tier 32 --words 4)
+URL=$(geturl "$OUT"); PIN=$(getpin "$OUT")
+[ "$(printf "%s" "$PIN" | tr -cd "-" | wc -c | tr -d " ")" -eq 3 ] || { echo "expected 4-word PIN, got $PIN"; exit 1; }
+node tests/e2e.mjs "$URL" "$PIN" > "$TMP/blob2.out" 2>/dev/null
+[ "$(shasum -a 256 < "$TMP/blob.pdf")" = "$(shasum -a 256 < "$TMP/blob2.out")" ] || { echo "BROWSER-SHARE FILE MISMATCH"; exit 1; }
+echo "-- browser-shared 3 MiB file (full tier, 4-word PIN) retrieved byte-exact"
+
 echo "== oversize file is rejected locally =="
 head -c $((20*1024*1024+1)) /dev/zero > "$TMP/toobig.bin"
 if ./sharebuff --server "$SERVER_URL" --file "$TMP/toobig.bin" 2>"$TMP/err.txt"; then

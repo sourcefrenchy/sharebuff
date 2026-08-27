@@ -16,6 +16,24 @@ const MAX_BLOB = 4 + 4096 + 20 * 1024 * 1024 + 12 + 16; // envelope + nonce + ta
 const MAX_CT_B64 = Math.ceil(MAX_BLOB / 3) * 4 + 8;
 const MAX_BODY = 32 * 1024 * 1024;
 const DEFAULT_TTL = 604800;
+
+// Corporate-environment signals (best effort; see docs/SECURITY.md). Any hit
+// makes the page hide the Share tab so company data isn't posted by accident.
+const SWG_VENDORS = ['ZSCALER', 'NETSKOPE', 'PALO ALTO', 'PRISMA', 'FORCEPOINT', 'IBOSS', 'MENLO',
+  'SYMANTEC', 'BROADCOM', 'UMBRELLA', 'CATO NETWORKS', 'CHECK POINT', 'FORTINET', 'SKYHIGH', 'MCAFEE'];
+const PROXY_HEADERS = ['via', 'x-bluecoat-via', 'x-zscaler-ip', 'x-zscaler-user', 'x-netskope-user', 'proxy-authorization'];
+
+function environment(request: Request): { share: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const policy = (request.headers.get('x-sharebuff-policy') ?? '').toLowerCase();
+  if (policy.includes('retrieve-only') || policy.includes('no-share')) reasons.push('organization policy header');
+  for (const h of PROXY_HEADERS) if (request.headers.has(h)) reasons.push(`proxy header ${h}`);
+  const xff = request.headers.get('x-forwarded-for') ?? '';
+  if (xff.split(',').filter(Boolean).length > 1) reasons.push('forwarded through a proxy');
+  const org = ((request.cf as { asOrganization?: string } | undefined)?.asOrganization ?? '').toUpperCase();
+  for (const v of SWG_VENDORS) if (org.includes(v)) { reasons.push(`secure web gateway (${org})`); break; }
+  return { share: reasons.length === 0, reasons };
+}
 const MIN_TTL = 60;
 const MAX_TTL = 604800;
 
@@ -96,6 +114,9 @@ export default {
     }
     if (claimMatch && request.method === 'POST') {
       return handleClaim(request, env, claimMatch[1]);
+    }
+    if (url.pathname === '/api/env' && request.method === 'GET') {
+      return json(200, environment(request));
     }
     if (url.pathname.startsWith('/api/')) {
       return err(404, 'not found');

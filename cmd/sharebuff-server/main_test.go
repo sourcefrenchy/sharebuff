@@ -71,7 +71,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 func newTestServer(t *testing.T) (*httptest.Server, *fakeClock) {
 	t.Helper()
 	clk := &fakeClock{t: time.Now()}
-	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true}
 	ts := httptest.NewServer(newMux(s))
 	t.Cleanup(ts.Close)
 	return ts, clk
@@ -270,6 +270,53 @@ func TestLargePayloadRoundtrip(t *testing.T) {
 	}
 	if body["ct"].(string) != sec.ct {
 		t.Fatal("large ciphertext corrupted in transit")
+	}
+}
+
+func TestEnvironmentSignals(t *testing.T) {
+	ts, _ := newTestServer(t)
+	get := func(hdr map[string]string) (bool, []any) {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/env", nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out["share"].(bool), out["reasons"].([]any)
+	}
+	if share, reasons := get(nil); !share || len(reasons) != 0 {
+		t.Fatalf("clean request: share=%v reasons=%v", share, reasons)
+	}
+	for _, h := range []map[string]string{
+		{"X-Sharebuff-Policy": "retrieve-only"},
+		{"Via": "1.1 zscaler.net"},
+		{"X-Forwarded-For": "10.0.0.5, 203.0.113.9"},
+		{"X-Netskope-User": "alice"},
+	} {
+		if share, reasons := get(h); share || len(reasons) == 0 {
+			t.Fatalf("headers %v should disable share: share=%v reasons=%v", h, share, reasons)
+		}
+	}
+}
+
+func TestShareDisabledByOperator(t *testing.T) {
+	s := &store{m: make(map[string]*record), maxTTL: time.Hour, now: time.Now, allowShare: false}
+	ts := httptest.NewServer(newMux(s))
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out["share"].(bool) {
+		t.Fatal("operator -share=false not honoured")
 	}
 }
 

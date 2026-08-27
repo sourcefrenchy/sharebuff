@@ -15,9 +15,72 @@
       <img src="/logo.svg" alt="" width="46" height="46">
       <h1>Sharebuff</h1>
     </div>
-    <p class="tagline">One-shot encrypted drop for text and files. Decryption happens in your browser; the server never sees the data or the PIN.</p>
+    <p class="tagline">One-shot encrypted drop for text and files. Everything is encrypted and decrypted in your browser; the server never sees the data, the key, or the PIN.</p>
 
-    <section id="state-pin" hidden>
+    <nav class="tabs" role="tablist" aria-label="Mode">
+      <button id="tab-share" role="tab" type="button" aria-selected="true" aria-controls="state-share">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="4" y="11" width="16" height="10" rx="3" fill="currentColor"/><path d="M12 14v4" stroke="var(--card)" stroke-width="2" stroke-linecap="round"/></svg>
+        Share
+      </button>
+      <button id="tab-retrieve" role="tab" type="button" aria-selected="false" aria-controls="state-pin">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="4" y="11" width="16" height="10" rx="3" fill="currentColor"/><path d="M12 14v4" stroke="var(--card)" stroke-width="2" stroke-linecap="round"/></svg>
+        Retrieve
+      </button>
+    </nav>
+
+    <!-- ===================== Share ===================== -->
+    <section id="state-share" role="tabpanel" hidden>
+      <label for="share-text">Text to share</label>
+      <textarea id="share-text" rows="6" spellcheck="false" autocomplete="off"
+                placeholder="Paste here (⌘V / Ctrl+V)…"></textarea>
+      <div class="row">
+        <button type="button" id="read-clip-btn" class="secondary">Read clipboard</button>
+        <label class="secondary filebtn" for="share-file">Choose a file…</label>
+        <input type="file" id="share-file" hidden>
+      </div>
+      <p id="file-row" class="fine" hidden>File: <strong id="file-name"></strong> (<span id="file-size"></span>) <button type="button" id="file-clear" class="link">remove</button></p>
+
+      <details class="opts">
+        <summary>Options — tiny 13-char code, 3-word PIN, 7 days</summary>
+        <fieldset>
+          <legend>Link size</legend>
+          <label><input type="radio" name="tier" value="5" checked> Tiny — 13-char code, 40-bit key (default)</label>
+          <label><input type="radio" name="tier" value="16"> Short — 31 chars, 128-bit key</label>
+          <label><input type="radio" name="tier" value="32"> Full — 57 chars, 256-bit key (formal post-quantum bar)</label>
+        </fieldset>
+        <fieldset>
+          <legend>PIN</legend>
+          <label><input type="radio" name="pinwords" value="3" checked> 3 words (37.7 bits)</label>
+          <label><input type="radio" name="pinwords" value="4"> 4 words (50 bits)</label>
+        </fieldset>
+        <fieldset>
+          <legend>Expires</legend>
+          <label><input type="radio" name="ttl" value="3600"> 1 hour</label>
+          <label><input type="radio" name="ttl" value="86400"> 1 day</label>
+          <label><input type="radio" name="ttl" value="604800" checked> 7 days</label>
+        </fieldset>
+      </details>
+
+      <button id="create-btn" type="button">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="4" y="11" width="16" height="10" rx="3" fill="currentColor"/><path d="M10.5 16.2l1.2 1.2 2.6-2.8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Create secure link
+      </button>
+      <p class="fine">The link and PIN are generated here. Only ciphertext is uploaded; it self-destructs on the first successful retrieval, after 10 wrong PINs, or when it expires.</p>
+      <p id="share-status" class="status" role="status"></p>
+    </section>
+
+    <section id="state-created" hidden>
+      <p class="status ok">Encrypted and posted. The text has been cleared from this page.</p>
+      <label for="out-url">Link</label>
+      <div class="copyrow"><input id="out-url" type="text" readonly spellcheck="false"><button type="button" id="copy-url">Copy</button></div>
+      <label for="out-pin">PIN</label>
+      <div class="copyrow"><input id="out-pin" type="text" readonly spellcheck="false"><button type="button" id="copy-pin">Copy</button></div>
+      <p class="fine">Send the link and the PIN over <strong>two different channels</strong> (for example the link by chat and the PIN by voice). Typing instead of pasting? The recipient can open this site and enter the code <span id="out-code" class="mono"></span> in the Retrieve tab. <span id="out-expiry"></span></p>
+      <button type="button" id="share-again" class="secondary">Share something else</button>
+    </section>
+
+    <!-- ===================== Retrieve ===================== -->
+    <section id="state-pin" role="tabpanel" hidden>
       <form id="pin-form" autocomplete="off">
         <div id="code-row" hidden>
           <label for="code">Code from the sender</label>

@@ -3,7 +3,8 @@
 // the browser runs — web/crypto.js (vendored noble scrypt + WebCrypto).
 // Run: node tests/parity.mjs   (regenerate vectors: go test ./internal/wire -run TestVectors -update)
 import { readFile } from 'node:fs/promises';
-import { decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex } from '../web/crypto.js';
+import { decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex, encrypt, encodeEnvelope } from '../web/crypto.js';
+import { WORDS } from '../web/wordlist.js';
 
 const vectors = JSON.parse(await readFile(new URL('../internal/wire/testdata/vectors.json', import.meta.url), 'utf8'));
 let failures = 0;
@@ -30,6 +31,18 @@ for (const [i, v] of vectors.entries()) {
   const { header, payload } = parseEnvelope(plain);
   check(i, 'header', JSON.stringify(header), JSON.stringify(JSON.parse(v.header_json)));
   check(i, 'payload', b64(payload), v.payload_b64);
+
+  // Sender path: encrypt with the browser code, decrypt again, byte-exact.
+  const env2 = encodeEnvelope(JSON.parse(v.header_json), payload);
+  check(i, 'encodeEnvelope', b64(env2), v.envelope_b64);
+  const blob2 = await encrypt(keys.enc, locator, env2);
+  check(i, 'encrypt→decrypt', b64(await decrypt(keys.enc, locator, blob2)), v.envelope_b64);
+}
+
+// The page's wordlist must be the CLI's wordlist, verbatim.
+const goWords = (await readFile(new URL('../cmd/sharebuff/wordlist.txt', import.meta.url), 'utf8')).split(/\s+/).filter(Boolean);
+if (goWords.length !== WORDS.length || goWords.some((w, i) => w !== WORDS[i])) {
+  failures++; console.error(`wordlist MISMATCH: go ${goWords.length} words, js ${WORDS.length}`);
 }
 
 if (failures) { console.error(`FAIL: ${failures} mismatch(es)`); process.exit(1); }

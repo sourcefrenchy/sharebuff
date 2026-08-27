@@ -104,3 +104,33 @@ textarea {
 .status.err { color: var(--err); font-weight: 600; }
 .fine { color: var(--muted); font-size: .8rem; margin-top: 1rem; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ---- tabs & share ---- */
+.tabs { display: flex; gap: .4rem; margin: 0 0 1.1rem; border-bottom: 1px solid var(--border); }
+.tabs button {
+  width: auto; margin: 0; padding: .5rem .9rem; background: transparent; color: var(--muted);
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0; display: inline-flex; gap: .45rem; align-items: center;
+}
+.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tabs button:hover { color: var(--ink); }
+.tabs svg, #create-btn svg { flex: none; }
+#create-btn { display: inline-flex; gap: .55rem; align-items: center; justify-content: center; }
+.row { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem; }
+.row > * { flex: 1 1 auto; width: auto; margin: 0; }
+button.secondary, .filebtn {
+  background: transparent; color: var(--accent); border: 1px solid var(--border);
+  font-weight: 600; padding: .55rem .9rem; border-radius: 10px; text-align: center; cursor: pointer;
+}
+button.link { width: auto; display: inline; padding: 0; margin: 0; background: none; color: var(--accent); font-weight: 600; text-decoration: underline; }
+#share-text { width: 100%; font: .95rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--ink); padding: .6rem; resize: vertical; margin-bottom: .6rem; }
+#share-text:focus, .copyrow input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.opts { margin: .25rem 0 .8rem; }
+.opts summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.opts fieldset { border: 1px solid var(--border); border-radius: 10px; padding: .5rem .8rem; margin: .5rem 0 0; }
+.opts legend { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 0 .3rem; }
+.opts label { display: flex; gap: .5rem; align-items: center; font-weight: 500; font-size: .9rem; margin: .15rem 0; }
+.copyrow { display: flex; gap: .5rem; margin-bottom: .8rem; }
+.copyrow input { flex: 1; font: 1rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .02em; text-transform: none; padding: .6rem .7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--ink); margin: 0; min-width: 0; }
+.copyrow button { width: auto; margin: 0; padding: .6rem 1rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

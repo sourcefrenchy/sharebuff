@@ -48,6 +48,46 @@ Two properties matter here:
    *multiplies* the work instead of adding to it. This is what lets `--tiny`
    use a 40-bit key safely.
 
+### Sending from the browser
+
+The Share tab runs the sender side in page JavaScript: key, locator and PIN
+from `crypto.getRandomValues`, AES-256-GCM via WebCrypto, the same scrypt.
+This adds **no new trusted party** — the recipient already runs decryption in
+JavaScript from this origin — and the server still receives only
+`{locator, ciphertext, verifier}`. What it does add: plaintext briefly lives in
+the sender's page (cleared after posting), and clipboard reads require a click
+plus the browser's own permission prompt. The CLI remains the option for
+scripts and for hosts where you don't want to trust a browser.
+
+### Corporate and managed devices: the Share tab hides itself
+
+Browser-side sharing is a convenience, and on a company machine it is also an
+easy way to post company data somewhere it shouldn't go. The page therefore
+hides the Share tab (Retrieve keeps working) when any of three independent
+signals fires:
+
+1. **Managed browser.** Chrome and Edge expose `navigator.managed` only when
+   an enterprise policy is applied; if `getManagedConfiguration()` resolves,
+   the device is managed.
+2. **Secure web gateway / TLS-intercepting proxy** (server-side, via
+   `GET /api/env`): the request's egress ASN organization matches a known SWG
+   vendor (Zscaler, Netskope, Palo Alto Prisma, Forcepoint, iboss, Menlo,
+   Symantec/Broadcom, Cisco Umbrella, Cato, Check Point, Fortinet, Skyhigh),
+   or it carries proxy-injected headers (`Via`, `X-BlueCoat-Via`,
+   `X-Zscaler-*`, `X-Netskope-*`, `Proxy-Authorization`, or a multi-hop
+   `X-Forwarded-For`).
+3. **Organization kill-switch.** IT can inject `X-Sharebuff-Policy:
+   retrieve-only` at their proxy (deterministic, no heuristics), run the
+   self-hosted server with `-share=false`, or simply DNS-block the host.
+
+**Limits, stated plainly:** this is a guard against *accidental* policy
+breaches, not data-loss prevention. Signals 1–2 are heuristics — a personal
+device on a corporate Wi-Fi can trip them (false positive: use the CLI), and a
+determined insider can bypass all of them (curl against the API, or any other
+paste site). Real exfiltration control belongs in the organization's DLP and
+egress policy; signal 3 is there so those policies can switch this page off
+with one header.
+
 ## Threat 1 — online guessing (someone has the code, not the PIN; or neither)
 
 Each claim costs the client a full scrypt (~1 s, 64 MiB) — a built-in

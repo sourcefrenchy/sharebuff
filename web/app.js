@@ -1,19 +1,22 @@
-// Sharebuff retrieve page. All cryptography lives in crypto.js (shared with
-// the node test harness); this file is only UI flow. The code (locator + key)
-// comes from the URL fragment or is typed into the page; only the locator and
-// the derived claim proof are ever transmitted, and only when a PIN is
-// deliberately submitted.
-import { decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex } from './crypto.js';
+// Sharebuff page. All cryptography lives in crypto.js (shared verbatim with
+// the node test harness); this file is UI flow only. The code (locator + key)
+// and the PIN never leave the browser: only the locator, the ciphertext and
+// a derived proof are ever transmitted.
+import {
+  decodeCode, derive, decrypt, parseEnvelope, b64decode, toHex,
+  createSecret, newWordPin,
+} from './crypto.js';
+import { WORDS } from './wordlist.js';
 
 const $ = (id) => document.getElementById(id);
-const show = (id) => {
-  for (const s of ['state-pin', 'state-done']) $(s).hidden = s !== id;
-};
-function setStatus(msg, cls = '') {
-  const el = $('status');
+const PANELS = ['state-share', 'state-created', 'state-pin', 'state-done'];
+const show = (id) => { for (const p of PANELS) $(p).hidden = p !== id; };
+function status(el, msg, cls = '') {
   el.textContent = msg;
   el.className = 'status ' + cls;
 }
+const setStatus = (msg, cls = '') => status($('status'), msg, cls);
+const setShareStatus = (msg, cls = '') => status($('share-status'), msg, cls);
 
 function formatSize(n) {
   if (n < 1024) return `${n} B`;
@@ -22,14 +25,136 @@ function formatSize(n) {
 }
 
 async function copyToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false; // e.g. gesture expired after the async KDF — offer a button
-  }
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
 
+// ---------------------------------------------------------------- tabs
+function selectTab(which) {
+  const share = which === 'share';
+  $('tab-share').setAttribute('aria-selected', String(share));
+  $('tab-retrieve').setAttribute('aria-selected', String(!share));
+  show(share ? 'state-share' : 'state-pin');
+  (share ? $('share-text') : ($('code-row').hidden ? $('pin') : $('code'))).focus();
+}
+$('tab-share').addEventListener('click', () => selectTab('share'));
+$('tab-retrieve').addEventListener('click', () => selectTab('retrieve'));
+
+// ---------------------------------------------------------------- corporate guard
+// Best-effort signals that this is a managed / corporate environment, in
+// which case the Share tab is hidden (Retrieve keeps working). Not a DLP
+// control — see docs/SECURITY.md — but it prevents accidental policy breaches.
+async function corporateSignals() {
+  const reasons = [];
+  try {
+    if (navigator.managed && typeof navigator.managed.getManagedConfiguration === 'function') {
+      await navigator.managed.getManagedConfiguration(['sharebuff']);
+      reasons.push('managed browser (enterprise policy)');
+    }
+  } catch { /* rejects when not managed */ }
+  try {
+    const resp = await fetch('/api/env', { cache: 'no-store' });
+    if (resp.ok) {
+      const env = await resp.json();
+      if (env && env.share === false) reasons.push(...(env.reasons || ['server policy']));
+    }
+  } catch { /* fail open: nothing to decide on */ }
+  return reasons;
+}
+
+function disableShare(reasons) {
+  $('tab-share').hidden = true;
+  const note = document.createElement('p');
+  note.className = 'warnbox';
+  note.setAttribute('role', 'note');
+  note.textContent = `Sharing from this page is turned off on corporate or managed devices to avoid posting company data by accident (${reasons.join('; ')}). You can still retrieve secrets here; use a personal device or the CLI to share.`;
+  $('state-share').replaceChildren(note);
+  if ($('tab-share').getAttribute('aria-selected') === 'true') selectTab('retrieve');
+}
+
+// ---------------------------------------------------------------- share
+let chosenFile = null;
+const MAX_PAYLOAD = 20 * 1024 * 1024;
+
+$('read-clip-btn').addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) { setShareStatus('Your clipboard is empty.', 'err'); return; }
+    $('share-text').value = text;
+    setShareStatus(`Read ${formatSize(new TextEncoder().encode(text).length)} from the clipboard.`);
+  } catch {
+    setShareStatus('Your browser did not allow reading the clipboard — paste into the box with ⌘V / Ctrl+V instead.', 'err');
+  }
+});
+
+$('share-file').addEventListener('change', () => {
+  chosenFile = $('share-file').files[0] || null;
+  $('file-row').hidden = !chosenFile;
+  if (chosenFile) {
+    $('file-name').textContent = chosenFile.name;
+    $('file-size').textContent = formatSize(chosenFile.size);
+  }
+});
+$('file-clear').addEventListener('click', () => {
+  chosenFile = null;
+  $('share-file').value = '';
+  $('file-row').hidden = true;
+});
+
+const radio = (name) => document.querySelector(`input[name="${name}"]:checked`).value;
+
+$('create-btn').addEventListener('click', async () => {
+  const btn = $('create-btn');
+  btn.disabled = true;
+  try {
+    let header, payload;
+    if (chosenFile) {
+      if (chosenFile.size > MAX_PAYLOAD) { setShareStatus('That file is over the 20 MiB limit.', 'err'); return; }
+      payload = new Uint8Array(await chosenFile.arrayBuffer());
+      header = { t: 'file', n: chosenFile.name.slice(0, 255), m: chosenFile.type || 'application/octet-stream' };
+    } else {
+      const text = $('share-text').value;
+      if (!text) { setShareStatus('Paste some text or choose a file first.', 'err'); return; }
+      payload = new TextEncoder().encode(text);
+      if (payload.length > MAX_PAYLOAD) { setShareStatus('That text is over the 20 MiB limit.', 'err'); return; }
+      header = { t: 'text' };
+    }
+    setShareStatus('Encrypting locally (memory-hard key derivation, ~1 s)…');
+    const pin = newWordPin(WORDS, Number(radio('pinwords')));
+    const { code, expiresAt } = await createSecret('', {
+      header, payload, keyBytes: Number(radio('tier')), pin, ttlSeconds: Number(radio('ttl')),
+    });
+    // Do not leave plaintext lying around in the page.
+    $('share-text').value = '';
+    chosenFile = null; $('share-file').value = ''; $('file-row').hidden = true;
+    payload.fill(0);
+
+    $('out-url').value = `${location.origin}/#${code}`;
+    $('out-pin').value = pin;
+    $('out-code').textContent = code;
+    $('out-expiry').textContent = expiresAt ? `Expires ${new Date(expiresAt * 1000).toLocaleString()}.` : '';
+    setShareStatus('');
+    show('state-created');
+  } catch (e) {
+    setShareStatus(`Could not create the link: ${e.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+for (const [btnId, inputId] of [['copy-url', 'out-url'], ['copy-pin', 'out-pin']]) {
+  $(btnId).addEventListener('click', async () => {
+    const ok = await copyToClipboard($(inputId).value);
+    $(btnId).textContent = ok ? 'Copied' : 'Select & copy manually';
+    if (!ok) $(inputId).select();
+    setTimeout(() => { $(btnId).textContent = 'Copy'; }, 1500);
+  });
+}
+$('share-again').addEventListener('click', () => {
+  $('out-url').value = ''; $('out-pin').value = ''; $('out-code').textContent = '';
+  selectTab('share');
+});
+
+// ---------------------------------------------------------------- retrieve
 function finishText(text, copied) {
   show('state-done');
   const msg = $('done-msg');
@@ -54,44 +179,41 @@ function finishText(text, copied) {
 
 function finishFile(header, payload) {
   show('state-done');
-  // The name is untrusted data from the sender: keep only a safe basename.
   const name = (header.n || 'sharebuff.bin').replace(/[/\\]/g, '_').slice(0, 255);
   $('done-msg').textContent = `Decrypted ${name} (${formatSize(payload.length)}).`;
   $('reveal-btn').hidden = true;
   const btn = $('download-btn');
   btn.hidden = false;
   btn.textContent = `Download ${name}`;
-  const blob = new Blob([payload], { type: header.m || 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(new Blob([payload], { type: header.m || 'application/octet-stream' }));
   btn.addEventListener('click', () => {
     const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
+    a.href = url; a.download = name; a.click();
   });
-  btn.click(); // start the download immediately; button stays for retries
+  btn.click();
 }
 
-// Fragment handling: a valid code hides the code field; an absent one shows
-// it (the bare site is a legitimate entry point for typed codes); a malformed
-// one shows it with a warning.
+// Fragment handling: a valid code opens Retrieve with the code hidden; none
+// opens Share; a malformed one opens Retrieve with the code field shown.
 const fragment = location.hash.length > 1 ? decodeURIComponent(location.hash.slice(1)) : '';
 let fromLink = null;
 if (fragment) {
   try { decodeCode(fragment); fromLink = fragment; } catch { fromLink = null; }
 }
-show('state-pin');
 if (fromLink) {
   $('code-row').hidden = true;
-  $('pin').focus();
+  selectTab('retrieve');
 } else {
   $('code-row').hidden = false;
   if (fragment) {
     $('code').value = fragment;
-    setStatus('The code in this link looks malformed — check it against what the sender gave you.', 'err');
+    selectTab('retrieve');
+    setStatus('The code in this link is malformed — nothing was sent. Check it against what the sender gave you.', 'err');
+  } else {
+    selectTab('share');
   }
-  $('code').focus();
 }
+corporateSignals().then((reasons) => { if (reasons.length) disableShare(reasons); });
 
 $('pin-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -103,7 +225,7 @@ $('pin-form').addEventListener('submit', async (ev) => {
     try {
       parsed = decodeCode(fromLink ?? $('code').value);
     } catch (e) {
-      setStatus(`That code doesn't look right: ${e.message}.`, 'err');
+      setStatus(`That isn't a valid code (${e.message}). Nothing was sent — check it against what the sender gave you.`, 'err');
       return;
     }
     const { locator, key } = parsed;
@@ -125,15 +247,15 @@ $('pin-form').addEventListener('submit', async (ev) => {
         finishText(text, await copyToClipboard(text));
       }
     } else if (resp.status === 403) {
-      setStatus(`Wrong PIN or code — the secret is untouched. ${body.attempts_left} attempt${body.attempts_left === 1 ? '' : 's'} left.`, 'err');
+      setStatus(`Wrong PIN (or wrong code) — the secret is untouched. ${body.attempts_left} attempt${body.attempts_left === 1 ? '' : 's'} left.`, 'err');
     } else if (resp.status === 429) {
       setStatus(`Too many attempts too quickly — wait ${body.retry_after_seconds}s and try again. (Rushed attempts are ignored, not counted.)`, 'err');
     } else if (resp.status === 410) {
       setStatus(body.reason === 'claimed'
-        ? 'This secret was already retrieved and has been destroyed.'
-        : 'This secret was destroyed after too many wrong PINs.', 'err');
+        ? 'Already retrieved: this secret was unlocked earlier and destroyed. If that wasn\'t you, someone else had both the code and the PIN — tell the sender.'
+        : 'Destroyed after too many wrong PINs. Someone (perhaps you) used up the 10 attempts; ask the sender to share it again.', 'err');
     } else if (resp.status === 404) {
-      setStatus('No such secret — it may have expired, or the code is mistyped.', 'err');
+      setStatus('No secret with this code — it may have expired, been mistyped, or never existed.', 'err');
     } else {
       setStatus(`Unexpected server response (${resp.status}). Try again.`, 'err');
     }

@@ -33,6 +33,15 @@ post-quantum bar). Want the full key by default? `export SHAREBUFF_TIER=full`
 Clipboard capture uses `pbpaste` (macOS), `wl-paste`/`xclip`/`xsel` (Linux),
 or `Get-Clipboard` (Windows PowerShell).
 
+**No CLI at hand?** Open the site itself: the **Share** tab pastes text (or reads
+the clipboard, or takes a file), encrypts it in the browser with the very same
+code the Retrieve tab uses, and hands you the link and the 3-word PIN with copy
+buttons. The server still only ever receives ciphertext. On **corporate or
+managed devices** the Share tab hides itself (managed-browser API, secure-web-
+gateway/proxy signals, or an IT-injected `X-Sharebuff-Policy: retrieve-only`
+header) so company data isn't posted by accident — details and limits in
+[docs/SECURITY.md](docs/SECURITY.md).
+
 The CLI defaults to the deployed Worker
 (`https://s.sharebuff-worker.workers.dev`); point it elsewhere with
 `SHAREBUFF_URL` or `--server`.
@@ -82,9 +91,9 @@ whichever comes first.
 | `cmd/sharebuff` | CLI: encrypt + post, prints URL & PIN to stdout |
 | `cmd/sharebuff-server` | self-hosted fallback server (same API, embedded page) |
 | `worker/` | Cloudflare Worker + Durable Objects (primary, free-tier host) |
-| `web/` | the static retrieve page, served identically by both servers |
+| `web/` | the static page (Share + Retrieve tabs), served identically by both servers |
 | `internal/wire` | shared Go crypto/encoding + reference test vectors |
-| `tests/` | JS↔Go parity test and E2E harness |
+| `tests/` | JS↔Go parity (both directions), browser-sender harness, E2E |
 | `docs/SPEC.md` | the protocol spec (source of truth) |
 | `docs/SECURITY.md` | threat model: brute force, offline, quantum — per tier |
 | `docs/THREAT-MODEL.md` | one-page scenario table with work factors and timings |

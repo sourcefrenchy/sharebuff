@@ -90,3 +90,105 @@ export function parseEnvelope(bytes) {
   if (header.t !== 'text' && header.t !== 'file') throw new Error('unknown envelope type');
   return { header, payload: bytes.slice(4 + hlen) };
 }
+
+// ---------------------------------------------------------------------------
+// Sender side (the Share tab). Same primitives, reversed; the server still
+// only ever receives {locator, ciphertext, verifier}.
+
+export function crockEncodeKey(key) { return crockEncode(key); }
+
+function group5(raw) {
+  const groups = [];
+  while (raw.length > 5) { groups.push(raw.slice(0, 5)); raw = raw.slice(5); }
+  groups.push(raw);
+  return groups.join('-');
+}
+
+export function encodeCode(locator, key) {
+  return group5(locator + crockEncode(key));
+}
+
+// n uniformly random alphabet characters. 32 divides 256, so a masked byte
+// is already unbiased.
+export function randomToken(n) {
+  const bytes = crypto.getRandomValues(new Uint8Array(n));
+  let out = '';
+  for (const b of bytes) out += CROCK[b & 31];
+  return out;
+}
+
+export const newLocator = () => randomToken(LOCATOR_LEN);
+export const newKey = (bytes) => crypto.getRandomValues(new Uint8Array(bytes));
+
+// words uniformly chosen from list (rejection sampling on 13-bit draws so
+// there is no modulo bias), joined by dashes — the CLI's PIN format.
+export function newWordPin(list, words) {
+  if (list.length > 8192) throw new Error('wordlist too large for 13-bit sampling');
+  const out = [];
+  const buf = new Uint16Array(1);
+  while (out.length < words) {
+    crypto.getRandomValues(buf);
+    const idx = buf[0] & 0x1fff;
+    if (idx < list.length) out.push(list[idx]);
+  }
+  return out.join('-');
+}
+
+export function encodeEnvelope(header, payload) {
+  const hj = utf8(JSON.stringify(header));
+  if (hj.length > 4096) throw new Error('envelope header too large');
+  const out = new Uint8Array(4 + hj.length + payload.length);
+  new DataView(out.buffer).setUint32(0, hj.length);
+  out.set(hj, 4);
+  out.set(payload, 4 + hj.length);
+  return out;
+}
+
+export async function encrypt(encKey, locator, plain) {
+  const key = await crypto.subtle.importKey('raw', encKey, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: utf8(AAD_PREFIX + locator) },
+    key,
+    plain,
+  ));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv, 0);
+  out.set(ct, 12);
+  return out;
+}
+
+export async function verifierHex(authKey) {
+  return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', authKey)));
+}
+
+export function b64encode(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+// Full sender flow against `base` (same-origin '' in the page). Retries the
+// public locator on a 409 collision. Returns {code, pin, expiresAt}.
+export async function createSecret(base, { header, payload, keyBytes, pin, ttlSeconds = 604800 }) {
+  const key = newKey(keyBytes);
+  const envelope = encodeEnvelope(header, payload);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const locator = newLocator();
+    const keys = await derive(key, pin, locator);
+    const blob = await encrypt(keys.enc, locator, envelope);
+    const resp = await fetch(`${base}/api/secrets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: locator, ct: b64encode(blob), verifier: await verifierHex(keys.auth), ttl_seconds: ttlSeconds }),
+    });
+    if (resp.status === 201) {
+      const body = await resp.json().catch(() => ({}));
+      return { code: encodeCode(locator, key), pin, expiresAt: body.expires_at };
+    }
+    if (resp.status === 409) continue;
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(`server said ${resp.status}${body.error ? `: ${body.error}` : ''}`);
+  }
+  throw new Error('could not find a free locator; try again');
+}
