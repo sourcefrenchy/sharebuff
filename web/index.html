@@ -128,8 +128,25 @@
       <textarea id="secret-out" readonly hidden rows="10"></textarea>
       <p class="fine">Destroyed on the server. Once you leave this page it is gone.</p>
     </section>
-    <footer class="fine" id="build" aria-label="Page integrity"></footer>
+    <footer class="foot">
+      <span class="fine" id="build" aria-label="Page integrity"></span>
+      <button type="button" id="stats-btn" class="iconbtn" aria-haspopup="dialog" aria-controls="stats" title="Usage statistics">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <span>Stats</span>
+      </button>
+    </footer>
   </main>
+
+  <dialog id="stats" aria-labelledby="stats-title">
+    <div class="stats-head">
+      <h2 id="stats-title">Usage, last 30 days</h2>
+      <button type="button" id="stats-close" class="secondary" aria-label="Close">Close</button>
+    </div>
+    <p class="fine">Public and anonymized: country flags and cities as seen by the edge, networks only as a keyed-hash tag (same network → same tag, never its name), never IP addresses, never links or contents.</p>
+    <div id="stats-body" aria-live="polite">
+      <p class="status">Loading…</p>
+    </div>
+  </dialog>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

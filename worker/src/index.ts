@@ -2,8 +2,8 @@
 // everything else to the static assets binding (../web). See docs/SPEC.md.
 // DO calls go over fetch() bodies, not RPC — ciphertexts can reach ~27 MB
 // base64, far past the 1 MiB RPC message cap.
-import { Secret, IPLimiter } from './secret';
-export { Secret, IPLimiter };
+import { Secret, IPLimiter, Stats } from './secret';
+export { Secret, IPLimiter, Stats };
 
 interface RateLimiter { limit(opts: { key: string }): Promise<{ success: boolean }> }
 
@@ -13,6 +13,9 @@ interface Env {
   CREATE_LIMIT: RateLimiter; // coarse per-IP creates per minute (eventually consistent)
   CLAIM_LIMIT: RateLimiter;  // coarse per-IP claims per minute
   IPLIMIT: DurableObjectNamespace; // exact per-IP limiter (one object per IP)
+  STATS: DurableObjectNamespace;   // singleton public-stats tallies
+  // Secret: HMAC key for the ASN tag shown in public stats (same network → same tag, never the name).
+  STATS_SALT?: string;
   // "enforce" (default): creation is refused on corporate signals; "advise": only reported via /api/env.
   SHARE_POLICY?: string;
   // Optional secret: POST JSON alert events here (ntfy, Slack, Discord…). Never payloads or IPs.
@@ -33,6 +36,27 @@ function alert(env: Env, ctx: ExecutionContext, event: string, fields: Record<st
 }
 
 const clientIP = (request: Request) => request.headers.get('cf-connecting-ip') ?? 'unknown';
+
+// Country flag + city are shown in the clear; the ASN organization only as a
+// 6-hex keyed-hash tag. Never IPs. Fire-and-forget so it never slows a request.
+async function asnTag(env: Env, org: string): Promise<string> {
+  if (!org) return '—';
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.STATS_SALT ?? 'sharebuff-unsalted'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(org.toUpperCase())));
+  return [...mac.slice(0, 3)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function recordStat(env: Env, ctx: ExecutionContext, request: Request, event: string, reason?: string): void {
+  const cf = request.cf as { country?: string; city?: string; asOrganization?: string } | undefined;
+  ctx.waitUntil((async () => {
+    try {
+      const body = JSON.stringify({ event, cc: cf?.country ?? '??', city: cf?.city ?? '—', asn: await asnTag(env, cf?.asOrganization ?? ''), reason });
+      await env.STATS.get(env.STATS.idFromName('global')).fetch('https://do/record', { method: 'POST', body });
+    } catch (e) {
+      console.error(JSON.stringify({ event: 'stats_error', message: String(e) }));
+    }
+  })());
+}
 
 const LIMITS = { create: { max: 10, period: 60 }, claim: { max: 30, period: 60 } } as const;
 
@@ -160,12 +184,14 @@ async function handleCreate(request: Request, env: Env, ctx: ExecutionContext): 
     if (!e.share) {
       const cf = request.cf as { asOrganization?: string; country?: string } | undefined;
       alert(env, ctx, 'create_refused', { reasons: e.reasons, asn_org: cf?.asOrganization, country: cf?.country });
+      recordStat(env, ctx, request, 'refused', e.reasons[0]);
       return json(403, { error: 'sharing is disabled on this network', reasons: e.reasons });
     }
   }
   const rl = await rateLimited(env, request, 'create');
   if (rl.wait) {
     alert(env, ctx, rl.limit === 'per_minute' ? 'rate_limited' : 'volume_limited', { bucket: 'create', limit: rl.limit });
+    recordStat(env, ctx, request, rl.limit === 'per_minute' ? 'rate_limited' : 'volume_limited', rl.limit);
     return tooMany(rl.wait);
   }
   const body = await readJSON(request, MAX_BODY);
@@ -183,6 +209,7 @@ async function handleCreate(request: Request, env: Env, ctx: ExecutionContext): 
     method: 'POST',
     body: JSON.stringify({ ct, verifier, ttl }),
   });
+  if (resp.status === 201) recordStat(env, ctx, request, 'create');
   return withNoStore(resp);
 }
 
@@ -193,6 +220,7 @@ async function handleClaim(request: Request, env: Env, ctx: ExecutionContext, id
   const rl = await rateLimited(env, request, 'claim');
   if (rl.wait) {
     alert(env, ctx, 'rate_limited', { bucket: 'claim', limit: rl.limit });
+    recordStat(env, ctx, request, 'rate_limited', 'claim');
     return tooMany(rl.wait);
   }
   const body = await readJSON(request, 4096);
@@ -206,7 +234,10 @@ async function handleClaim(request: Request, env: Env, ctx: ExecutionContext, id
   if (resp.status === 410) {
     const peek = (await resp.clone().json().catch(() => ({}))) as { reason?: string };
     if (peek.reason === 'burned') alert(env, ctx, 'secret_burned', { locator: id });
-  }
+    recordStat(env, ctx, request, peek.reason === 'burned' ? 'claim_burned' : 'claim_gone');
+  } else if (resp.status === 200) recordStat(env, ctx, request, 'claim_ok');
+  else if (resp.status === 403) recordStat(env, ctx, request, 'claim_wrong');
+  else if (resp.status === 404) recordStat(env, ctx, request, 'claim_missing');
   return withNoStore(resp);
 }
 
@@ -222,6 +253,12 @@ export default {
     }
     if (url.pathname === '/api/env' && request.method === 'GET') {
       return json(200, environment(request));
+    }
+    if (url.pathname === '/api/stats' && request.method === 'GET') {
+      const resp = await env.STATS.get(env.STATS.idFromName('global')).fetch('https://do/stats');
+      const out = new Response(resp.body, resp);
+      out.headers.set('cache-control', 'public, max-age=60');
+      return out;
     }
     if (url.pathname.startsWith('/api/')) {
       return err(404, 'not found');

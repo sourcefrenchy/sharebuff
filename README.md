@@ -149,6 +149,26 @@ any TLS-terminating proxy, and point the CLI at it with `SHAREBUFF_URL`/
 `--server`. Flags: `-create-rpm`/`-claim-rpm` (per-IP limits), `-enforce`
 (corporate-network refusal), `-share=false` (retrieve-only).
 
+## Metrics and logs
+
+Three places, from raw to friendly:
+
+- **Logs** — Cloudflare dashboard → Workers & Pages → `s` → *Logs* (observability is
+  on), or `cd worker && pnpm exec wrangler tail --format pretty`. Every abnormal
+  event (`create_refused`, `secret_burned`, `rate_limited`, `volume_limited`) is a
+  JSON line with reasons, egress ASN organization and country — never payloads
+  or IPs. `wrangler secret put ALERT_WEBHOOK` forwards them to ntfy/Slack/Discord.
+- **`GET /api/stats`** — public, anonymized 30-day tallies per day and per
+  place: country + city as seen by the edge, and the network only as a
+  6-character keyed-hash tag (`HMAC(STATS_SALT, ASN org)`, so the same network
+  is recognizable across rows but never named). No IPs, no locators, no sizes;
+  the recent-events feed is minute-resolution and lists abnormal events only.
+- **The 📊 Stats button** in the page footer opens the same data as a panel:
+  totals, a per-day bar chart of created + retrieved, a "where from" table with
+  flags and cities, and the recent abnormal events. The self-hosted server has the
+  same endpoint (country/city from `CF-IPCountry`/`CF-IPCity` when proxied;
+  `-stats-salt` for a stable tag across restarts).
+
 ## Verify the page you were served
 
 The browser client is first-party JavaScript, so its integrity is what a

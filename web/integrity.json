@@ -1,11 +1,11 @@
 {
   "generated_by": "make integrity",
   "sha256": {
-    "app.js": "a7b9fe36e4700b3460bbac0fc3d7a7be31b33af1eb9729c152d55d42dcb34d6c",
+    "app.js": "74629db83b87cc972cb83d9200cd79fa7b4e2a2616fae1f6773d9eacd2eddd6c",
     "crypto.js": "83413bcccc8f668e13e2b789c935897e857fd9184a4304425a8c48344f01eb36",
     "scrypt.js": "dc706d7f0ed6403c24bc4a2a6ce849daa4c1e42390c38b117f8ecf915b941a75",
     "wordlist.js": "f6796e5dfbbb2d3202c7a555ecfc45f5d5f9ef6edc525007f216d1463eab14ff",
-    "style.css": "a5daecdbe0efcc2c3bfb5f7557deecd07edcdc9ff1b514db972f917feda75705",
-    "index.html": "b88a936620b860b5e79beb4660a263278daa09cacd16787aee510386f5a94a1d"
+    "style.css": "7d68a5f4251347b808cc6d80f7115e2878563285daf624865777bab77a1b1554",
+    "index.html": "ad03237416ad1d56b571fbf57df90a9db0ba03c47bf5e4d22297e8878096267b"
   }
 }

@@ -10,12 +10,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "SECRET", "class_name": "Secret" },
-      { "name": "IPLIMIT", "class_name": "IPLimiter" }
+      { "name": "IPLIMIT", "class_name": "IPLimiter" },
+      { "name": "STATS", "class_name": "Stats" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Secret"] },
-    { "tag": "v2", "new_sqlite_classes": ["IPLimiter"] }
+    { "tag": "v2", "new_sqlite_classes": ["IPLimiter"] },
+    { "tag": "v3", "new_sqlite_classes": ["Stats"] }
   ],
   "vars": { "SHARE_POLICY": "enforce", "CREATE_PER_HOUR": "60", "CREATE_MIB_PER_HOUR": "256" },
   "ratelimits": [

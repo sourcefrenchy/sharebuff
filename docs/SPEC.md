@@ -165,6 +165,16 @@ retrieve-only`, secure-web-gateway egress ASN, proxy-injected headers) or the
 operator disabled it (`-share=false`). See SECURITY.md. No secret material is
 involved; the page fails open if the endpoint is unreachable.
 
+### `GET /api/stats`
+
+Public, anonymized usage tallies (cacheable 60 s):
+`{"days": 30, "totals": {event: n}, "by_day": {"YYYY-MM-DD": {event: n}},
+"by_geo": {"CC|City|asntag": {event: n}}, "feed": [{t, event, cc, city, asn,
+reason?}]}` where `event` ∈ create, claim_ok, claim_wrong, claim_burned,
+claim_gone, claim_missing, refused, rate_limited, volume_limited and `asntag` =
+first 6 hex chars of HMAC-SHA256(STATS_SALT, ASN organization). See SECURITY.md
+for what is deliberately not collected.
+
 ### `GET /`
 
 The static retrieve page. Response headers (both servers):

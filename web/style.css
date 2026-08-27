@@ -161,6 +161,36 @@ button.link { width: auto; display: inline; padding: 0; margin: 0; background: n
   padding: .75rem .9rem; color: var(--warn-ink); font-size: .9rem; margin: 0 0 .9rem;
 }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+
+/* ---- footer + stats ---- */
+.foot { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: 1.2rem; }
+.iconbtn { width: auto; margin: 0; padding: .35rem .7rem; background: transparent; color: var(--muted); border: 1px solid var(--border); display: inline-flex; gap: .4rem; align-items: center; font-size: .85rem; font-weight: 600; }
+.iconbtn svg { width: 1.1em; height: 1.1em; }
+.iconbtn:hover { color: var(--accent); border-color: var(--accent); }
+dialog#stats {
+  border: 1px solid var(--border); border-radius: 18px; background: var(--card); color: var(--ink);
+  padding: 1.25rem 1.4rem; width: min(40rem, 94vw); max-height: 88vh; overflow: auto; box-shadow: var(--shadow);
+}
+dialog#stats::backdrop { background: rgb(0 0 0 / .35); }
+.stats-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+.stats-head h2 { margin: 0; font-size: 1.15rem; }
+.stats-head button { width: auto; margin: 0; padding: .4rem .8rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .5rem; margin: .8rem 0; }
+.tile { border: 1px solid var(--border); border-radius: 12px; padding: .55rem .7rem; background: var(--field); }
+.tile .n { font: 650 1.35rem/1.1 ui-rounded, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.tile .l { color: var(--muted); font-size: .78rem; }
+.chart { display: block; width: 100%; height: 6.5rem; margin: .5rem 0 .2rem; }
+.chart rect { fill: var(--accent); }
+.chart rect.today { fill: color-mix(in srgb, var(--accent) 55%, var(--card)); }
+.chart .axis { stroke: var(--border); stroke-width: 1; }
+.chart-cap { color: var(--muted); font-size: .78rem; display: flex; justify-content: space-between; margin: 0 0 .8rem; }
+table.stats { width: 100%; border-collapse: collapse; font-size: .86rem; margin: .4rem 0 .9rem; }
+table.stats th, table.stats td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.stats th { color: var(--muted); font-weight: 600; font-size: .75rem; letter-spacing: .03em; text-transform: uppercase; }
+table.stats td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.stats .tag { font-family: ui-monospace, Menlo, monospace; font-size: .8rem; color: var(--muted); }
+.statwrap { overflow-x: auto; }
+h3.sub { font-size: .95rem; margin: .9rem 0 .2rem; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: no-preference) { button { transition: background-color .15s; } }

@@ -383,6 +383,59 @@ if (fromLink) {
 ready = true;
 $('claim-btn').disabled = false;
 
+// ---------------------------------------------------------------- stats dialog
+const EVENT_LABEL = {
+  create: 'Secrets created', claim_ok: 'Retrieved', claim_wrong: 'Wrong PIN', claim_burned: 'Burned (10 wrong PINs)',
+  claim_gone: 'Already retrieved', claim_missing: 'Unknown / expired', refused: 'Refused (corporate network)',
+  rate_limited: 'Rate-limited', volume_limited: 'Volume-capped',
+};
+const flag = (cc) => (/^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '🏳️');
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function renderStats(d) {
+  const T = d.totals || {};
+  const tiles = [['create', 'created'], ['claim_ok', 'retrieved'], ['claim_wrong', 'wrong PINs'], ['claim_burned', 'burned'], ['refused', 'refused'], ['rate_limited', 'rate-limited']]
+    .map(([k, l]) => `<div class="tile"><div class="n">${T[k] || 0}</div><div class="l">${l}</div></div>`).join('');
+
+  // Daily bars: creates + retrievals per day, one hue, thin marks, hover title.
+  const days = [];
+  for (let i = 29; i >= 0; i--) { const dt = new Date(Date.now() - i * 86400000); days.push(dt.toISOString().slice(0, 10)); }
+  const vals = days.map((k) => { const t = (d.by_day || {})[k] || {}; return (t.create || 0) + (t.claim_ok || 0); });
+  const max = Math.max(1, ...vals);
+  const W = 600, H = 100, gap = 2, bw = (W - gap * 29) / 30;
+  const bars = vals.map((v, i) => {
+    const h = Math.round((v / max) * (H - 14));
+    const x = (i * (bw + gap)).toFixed(1);
+    return `<rect x="${x}" y="${H - h}" width="${bw.toFixed(1)}" height="${h}" rx="2" class="${i === 29 ? 'today' : ''}"><title>${days[i]}: ${v} (created + retrieved)</title></rect>`;
+  }).join('');
+  const chart = `<svg class="chart" viewBox="0 0 ${W} ${H + 1}" role="img" aria-label="Secrets created and retrieved per day, last 30 days">${bars}<line class="axis" x1="0" y1="${H + 0.5}" x2="${W}" y2="${H + 0.5}"/></svg>
+    <p class="chart-cap"><span>${days[0]}</span><span>created + retrieved per day · peak ${max}</span><span>today</span></p>`;
+
+  const rows = Object.entries(d.by_geo || {})
+    .map(([g, c]) => { const [cc, city, asn] = g.split('|'); const total = Object.values(c).reduce((a, b) => a + b, 0); return { cc, city, asn, c, total }; })
+    .sort((a, b) => b.total - a.total).slice(0, 25)
+    .map((r) => `<tr><td>${flag(r.cc)} ${esc(r.city)}</td><td class="tag">${esc(r.asn)}</td><td class="num">${r.c.create || 0}</td><td class="num">${r.c.claim_ok || 0}</td><td class="num">${(r.c.claim_wrong || 0) + (r.c.claim_burned || 0)}</td><td class="num">${(r.c.refused || 0) + (r.c.rate_limited || 0) + (r.c.volume_limited || 0)}</td></tr>`).join('');
+  const geo = rows ? `<div class="statwrap"><table class="stats"><thead><tr><th>Where</th><th>Network tag</th><th class="num">Created</th><th class="num">Retrieved</th><th class="num">Wrong / burned</th><th class="num">Refused / limited</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="fine">Nothing yet.</p>';
+
+  const feed = (d.feed || []).slice(0, 20).map((e) => `<tr><td class="tag">${esc(e.t)}</td><td>${esc(EVENT_LABEL[e.event] || e.event)}${e.reason ? ` <span class="tag">${esc(e.reason)}</span>` : ''}</td><td>${flag(e.cc)} ${esc(e.city)}</td><td class="tag">${esc(e.asn)}</td></tr>`).join('');
+  const feedTable = feed ? `<div class="statwrap"><table class="stats"><thead><tr><th>When (UTC)</th><th>Event</th><th>Where</th><th>Network tag</th></tr></thead><tbody>${feed}</tbody></table></div>` : '<p class="fine">No abnormal events.</p>';
+
+  $('stats-body').innerHTML = `<div class="tiles">${tiles}</div>${chart}<h3 class="sub">Where from</h3>${geo}<h3 class="sub">Recent abnormal events</h3>${feedTable}`;
+}
+
+$('stats-btn').addEventListener('click', async () => {
+  const dlg = $('stats');
+  dlg.showModal();
+  $('stats-close').focus();
+  try {
+    const r = await fetch('/api/stats', { cache: 'no-store' });
+    renderStats(await r.json());
+  } catch (e) {
+    $('stats-body').innerHTML = `<p class="status err">Could not load statistics (${esc(short(e.message || String(e), 60))}).</p>`;
+  }
+});
+$('stats-close').addEventListener('click', () => $('stats').close());
+
 // Integrity footer: the build-time SHA-256 of app.js (first 12 hex chars).
 // A compromised origin could fake this line, so it is a convenience for
 // eyeballing against the published value — the real check is

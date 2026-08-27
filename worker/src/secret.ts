@@ -167,3 +167,69 @@ export class IPLimiter extends DurableObject {
     return json(200, { allowed: true });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Public, anonymized usage statistics. One singleton object keeps per-day
+// tallies and a short recent-events feed. What is stored: event kind, day,
+// country code, city, and a keyed-hash tag of the egress ASN organization
+// (the Worker computes HMAC(STATS_SALT, org) and sends only the tag, so the
+// same network is recognizable but never named). Never: IPs, locators,
+// payload sizes, precise timestamps (feed is minute-resolution).
+interface Day {
+  totals: Record<string, number>;
+  geo: Record<string, Record<string, number>>; // "CC|City|asntag" → counts
+}
+interface Feed { t: string; event: string; cc: string; city: string; asn: string; reason?: string }
+const STATS_DAYS = 30;
+const FEED_MAX = 60;
+
+export class Stats extends DurableObject {
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === '/record' && request.method === 'POST') return this.record(request);
+    if (url.pathname === '/stats') return this.stats();
+    return json(404, { error: 'not found' });
+  }
+
+  private dayKey(d = new Date()): string { return 'day:' + d.toISOString().slice(0, 10); }
+
+  private async record(request: Request): Promise<Response> {
+    const ev = await request.json<{ event: string; cc: string; city: string; asn: string; reason?: string }>();
+    const key = this.dayKey();
+    const day = (await this.ctx.storage.get<Day>(key)) ?? { totals: {}, geo: {} };
+    day.totals[ev.event] = (day.totals[ev.event] ?? 0) + 1;
+    const g = `${ev.cc}|${ev.city}|${ev.asn}`;
+    day.geo[g] = day.geo[g] ?? {};
+    day.geo[g][ev.event] = (day.geo[g][ev.event] ?? 0) + 1;
+    const feed = (await this.ctx.storage.get<Feed[]>('feed')) ?? [];
+    if (ev.event !== 'create' && ev.event !== 'claim_ok') {
+      feed.unshift({ t: new Date().toISOString().slice(0, 16) + 'Z', event: ev.event, cc: ev.cc, city: ev.city, asn: ev.asn, reason: ev.reason });
+      feed.length = Math.min(feed.length, FEED_MAX);
+    }
+    await this.ctx.storage.put({ [key]: day, feed });
+    // Prune old days occasionally.
+    if (Math.random() < 0.05) {
+      const cutoff = new Date(Date.now() - STATS_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const all = await this.ctx.storage.list<Day>({ prefix: 'day:' });
+      for (const k of all.keys()) if (k.slice(4) < cutoff) await this.ctx.storage.delete(k);
+    }
+    return json(200, { ok: true });
+  }
+
+  private async stats(): Promise<Response> {
+    const all = await this.ctx.storage.list<Day>({ prefix: 'day:' });
+    const days: Record<string, Record<string, number>> = {};
+    const geo: Record<string, Record<string, number>> = {};
+    const totals: Record<string, number> = {};
+    for (const [k, d] of all) {
+      days[k.slice(4)] = d.totals;
+      for (const [e, n] of Object.entries(d.totals)) totals[e] = (totals[e] ?? 0) + n;
+      for (const [g, counts] of Object.entries(d.geo)) {
+        geo[g] = geo[g] ?? {};
+        for (const [e, n] of Object.entries(counts)) geo[g][e] = (geo[g][e] ?? 0) + n;
+      }
+    }
+    const feed = (await this.ctx.storage.get<Feed[]>('feed')) ?? [];
+    return json(200, { days: STATS_DAYS, totals, by_day: days, by_geo: geo, feed });
+  }
+}

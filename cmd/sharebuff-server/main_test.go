@@ -77,7 +77,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 func newTestServer(t *testing.T) (*httptest.Server, *fakeClock) {
 	t.Helper()
 	clk := &fakeClock{t: time.Now()}
-	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: true, rl: make(map[string]*window)}
+	s := &store{m: make(map[string]*record), maxTTL: 168 * time.Hour, now: clk.Now, allowShare: true, enforce: true, rl: make(map[string]*window), statsSalt: []byte("test")}
 	ts := httptest.NewServer(newMux(s))
 	t.Cleanup(ts.Close)
 	return ts, clk
@@ -542,6 +542,50 @@ func TestAlertWebhook(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no webhook event received")
+	}
+}
+
+// TestStats: events are tallied per day and per "CC|City|asntag"; the ASN tag
+// is a keyed hash (stable for the same org, never the org itself), and the
+// feed carries only abnormal events.
+func TestStats(t *testing.T) {
+	ts, _ := newTestServer(t)
+	sec := makeSecret(t)
+	create(t, ts, sec)
+	claimURL := ts.URL + "/api/secrets/" + sec.id + "/claim"
+	post(t, claimURL, map[string]string{"auth": "00" + sec.authHex[2:]}) // wrong → claim_wrong
+	resp, err := http.Get(ts.URL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Totals map[string]int            `json:"totals"`
+		ByGeo  map[string]map[string]int `json:"by_geo"`
+		Feed   []map[string]any          `json:"feed"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Totals["create"] != 1 || out.Totals["claim_wrong"] != 1 {
+		t.Fatalf("totals %v", out.Totals)
+	}
+	if len(out.Feed) != 1 || out.Feed[0]["event"] != "claim_wrong" {
+		t.Fatalf("feed %v", out.Feed)
+	}
+	// ASN tag: keyed, stable across calls, never the org name.
+	s := &store{now: time.Now, statsSalt: []byte("k")}
+	r1, _ := http.NewRequest("POST", "/", nil)
+	r1.Header.Set("X-ASN-Org", "Zscaler Inc")
+	s.record(r1, "refused", "x")
+	s.record(r1, "refused", "x")
+	day := s.stats.days[time.Now().UTC().Format("2006-01-02")]
+	if len(day.Geo) != 1 {
+		t.Fatalf("same org should tally under one tag: %v", day.Geo)
+	}
+	for g := range day.Geo {
+		tag := strings.Split(g, "|")[2]
+		if len(tag) != 6 || strings.Contains(strings.ToUpper(g), "ZSCALER") {
+			t.Fatalf("asn tag %q leaks or is malformed", g)
+		}
 	}
 }
 

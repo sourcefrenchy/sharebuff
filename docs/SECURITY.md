@@ -235,6 +235,19 @@ See [THREAT-MODEL.md](THREAT-MODEL.md) for the scenario table with concrete
 work factors and timings, and [THREAT-REVIEW.md](THREAT-REVIEW.md) for the
 independent review whose findings (T1–T12, F1–F13) shaped the current design.
 
+## Public statistics: what is and isn't collected
+
+`GET /api/stats` (and the 📊 panel) publishes per-day counts of creates,
+retrievals, wrong PINs, burns, refusals and rate-limit hits, broken down by
+country, city and a **network tag** — `HMAC-SHA256(STATS_SALT, ASN organization)`
+truncated to 6 hex characters. The salt is a Worker secret, so the tag lets a
+reader see "the same network again" without learning which network; without
+the salt the tag cannot be reversed even by brute force over the ~100 k ASN
+names. Not collected: IP addresses, locators, payload sizes, user agents, or
+timestamps finer than a minute (feed) / a day (tallies). Retention: 30 days,
+60 feed entries. Successful creates and retrievals are counted but never
+listed individually.
+
 ## Detection: structured alerts
 
 The Worker logs `create_refused` (with reasons, egress ASN organization and

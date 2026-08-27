@@ -5,6 +5,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -56,6 +58,110 @@ type store struct {
 	trustProxy      bool // honour X-Real-IP / X-Forwarded-For for the client IP
 	rl              map[string]*window
 	alertWebhook    string
+
+	stats     *stats
+	statsSalt []byte
+}
+
+// stats is the in-memory counterpart of the Worker's Stats object: per-day
+// tallies by event and by "CC|City|asntag", plus a short recent-events feed.
+// Country/city come from CF-IPCountry / CF-IPCity headers when a Cloudflare
+// proxy fronts the server, otherwise "??"; the ASN tag is HMAC(salt, org)
+// when an X-ASN-Org header is supplied, otherwise "—".
+type stats struct {
+	days map[string]*statDay
+	feed []statEvent
+}
+type statDay struct {
+	Totals map[string]int            `json:"totals"`
+	Geo    map[string]map[string]int `json:"geo"`
+}
+type statEvent struct {
+	T      string `json:"t"`
+	Event  string `json:"event"`
+	CC     string `json:"cc"`
+	City   string `json:"city"`
+	ASN    string `json:"asn"`
+	Reason string `json:"reason,omitempty"`
+}
+
+const statsDays = 30
+
+// record tallies an event. Caller must NOT hold s.mu (it locks itself).
+func (s *store) record(r *http.Request, event, reason string) {
+	cc := r.Header.Get("CF-IPCountry")
+	if cc == "" {
+		cc = "??"
+	}
+	city := r.Header.Get("CF-IPCity")
+	if city == "" {
+		city = "—"
+	}
+	asn := "—"
+	if org := r.Header.Get("X-ASN-Org"); org != "" && len(s.statsSalt) > 0 {
+		mac := hmac.New(sha256.New, s.statsSalt)
+		mac.Write([]byte(strings.ToUpper(org)))
+		asn = hex.EncodeToString(mac.Sum(nil)[:3])
+	}
+	now := s.now().UTC()
+	day := now.Format("2006-01-02")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stats == nil {
+		s.stats = &stats{days: map[string]*statDay{}}
+	}
+	d := s.stats.days[day]
+	if d == nil {
+		d = &statDay{Totals: map[string]int{}, Geo: map[string]map[string]int{}}
+		s.stats.days[day] = d
+	}
+	d.Totals[event]++
+	g := cc + "|" + city + "|" + asn
+	if d.Geo[g] == nil {
+		d.Geo[g] = map[string]int{}
+	}
+	d.Geo[g][event]++
+	if event != "create" && event != "claim_ok" {
+		s.stats.feed = append([]statEvent{{T: now.Format("2006-01-02T15:04Z"), Event: event, CC: cc, City: city, ASN: asn, Reason: reason}}, s.stats.feed...)
+		if len(s.stats.feed) > 60 {
+			s.stats.feed = s.stats.feed[:60]
+		}
+	}
+	cutoff := now.AddDate(0, 0, -statsDays).Format("2006-01-02")
+	for k := range s.stats.days {
+		if k < cutoff {
+			delete(s.stats.days, k)
+		}
+	}
+}
+
+func (s *store) statsHandler(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	totals := map[string]int{}
+	byDay := map[string]map[string]int{}
+	byGeo := map[string]map[string]int{}
+	feed := []statEvent{}
+	if s.stats != nil {
+		for day, d := range s.stats.days {
+			byDay[day] = d.Totals
+			for e, n := range d.Totals {
+				totals[e] += n
+			}
+			for g, counts := range d.Geo {
+				if byGeo[g] == nil {
+					byGeo[g] = map[string]int{}
+				}
+				for e, n := range counts {
+					byGeo[g][e] += n
+				}
+			}
+		}
+		feed = s.stats.feed
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	_ = json.NewEncoder(w).Encode(map[string]any{"days": statsDays, "totals": totals, "by_day": byDay, "by_geo": byGeo, "feed": feed})
 }
 
 type window struct {
@@ -247,6 +353,7 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 	if s.enforce {
 		if reasons := s.signals(r); len(reasons) > 0 {
 			s.alert("create_refused", map[string]any{"reasons": reasons, "ua": r.UserAgent()})
+			s.record(r, "refused", reasons[0])
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "sharing is disabled on this network", "reasons": reasons})
 			return
 		}
@@ -265,6 +372,7 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 			event = "volume_limited"
 		}
 		s.alert(event, map[string]any{"bucket": "create", "limit": limit})
+		s.record(r, event, limit)
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many requests", "retry_after_seconds": retry})
 		return
@@ -306,6 +414,9 @@ func (s *store) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m[req.ID] = rec
+	s.mu.Unlock()
+	s.record(r, "create", "")
+	s.mu.Lock()
 	writeJSON(w, http.StatusCreated, map[string]int64{"expires_at": rec.expiresAt.Unix()})
 }
 
@@ -327,6 +438,9 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	if ok, retry := s.allow("claim", s.clientIP(r), s.claimRPM, now); !ok {
 		s.alert("rate_limited", map[string]any{"bucket": "claim"})
+		s.mu.Unlock()
+		s.record(r, "rate_limited", "claim")
+		s.mu.Lock()
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many requests", "retry_after_seconds": retry})
 		return
@@ -334,10 +448,16 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 	rec, ok := s.m[id]
 	if !ok || now.After(rec.expiresAt) {
 		delete(s.m, id)
+		s.mu.Unlock()
+		s.record(r, "claim_missing", "")
+		s.mu.Lock()
 		errJSON(w, http.StatusNotFound, "not found")
 		return
 	}
 	if rec.gone != "" {
+		s.mu.Unlock()
+		s.record(r, "claim_"+map[string]string{"claimed": "gone", "burned": "burned"}[rec.gone], "")
+		s.mu.Lock()
 		writeJSON(w, http.StatusGone, map[string]string{"reason": rec.gone})
 		return
 	}
@@ -356,15 +476,24 @@ func (s *store) claim(w http.ResponseWriter, r *http.Request) {
 			// Burn: keep only a tombstone until the original expiry.
 			s.m[id] = &record{gone: "burned", expiresAt: rec.expiresAt}
 			s.alert("secret_burned", map[string]any{"locator": id})
+			s.mu.Unlock()
+			s.record(r, "claim_burned", "")
+			s.mu.Lock()
 			writeJSON(w, http.StatusGone, map[string]string{"reason": "burned"})
 			return
 		}
+		s.mu.Unlock()
+		s.record(r, "claim_wrong", "")
+		s.mu.Lock()
 		writeJSON(w, http.StatusForbidden, map[string]int{"attempts_left": wire.MaxAttempts - rec.attempts})
 		return
 	}
 	// Valid claim: destroy before responding; exactly one caller can get here.
 	ct := rec.ct
 	s.m[id] = &record{gone: "claimed", expiresAt: rec.expiresAt}
+	s.mu.Unlock()
+	s.record(r, "claim_ok", "")
+	s.mu.Lock()
 	writeJSON(w, http.StatusOK, map[string]string{"ct": base64.StdEncoding.EncodeToString(ct)})
 }
 
@@ -391,6 +520,7 @@ func newMux(s *store) *http.ServeMux {
 	mux.HandleFunc("POST /api/secrets", s.create)
 	mux.HandleFunc("POST /api/secrets/{id}/claim", s.claim)
 	mux.HandleFunc("GET /api/env", s.environment)
+	mux.HandleFunc("GET /api/stats", s.statsHandler)
 	mux.Handle("GET /", staticHandler())
 	return mux
 }
@@ -406,11 +536,17 @@ func main() {
 	mibPerHour := flag.Int("mib-per-hour", 256, "per-IP upload MiB per hour (0 = unlimited)")
 	trustProxy := flag.Bool("trust-proxy-headers", false, "use X-Real-IP / X-Forwarded-For as the client IP (only behind a proxy you control)")
 	alertWebhook := flag.String("alert-webhook", "", "POST JSON alert events (create_refused, secret_burned, rate_limited) to this URL")
+	statsSalt := flag.String("stats-salt", "", "HMAC key for the ASN tag in /api/stats (random per process if empty)")
 	flag.Parse()
+	salt := []byte(*statsSalt)
+	if len(salt) == 0 {
+		salt = make([]byte, 32)
+		_, _ = rand.Read(salt)
+	}
 
 	s := &store{m: make(map[string]*record), maxTTL: *maxTTL, now: time.Now, allowShare: *share, enforce: *enforce,
 		createRPM: *createRPM, claimRPM: *claimRPM, createPerHour: *createPerHour, createBytesHour: int64(*mibPerHour) << 20,
-		trustProxy: *trustProxy, rl: make(map[string]*window), alertWebhook: *alertWebhook}
+		trustProxy: *trustProxy, rl: make(map[string]*window), alertWebhook: *alertWebhook, statsSalt: salt}
 	go s.janitor()
 	mux := newMux(s)
 
